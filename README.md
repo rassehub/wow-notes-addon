@@ -2,8 +2,19 @@
 
 An addon for **World of Warcraft: Forever** (interface 16001, game version 1.60.1).
 
-Keep lists of the items you are working towards. Type an item name, pick it from the
-suggestions, set how many you need, and the addon tracks your bags and bank against it.
+An in-game wiki and goal tracker in one window, so you do not need a browser:
+
+- **Goals**: lists of items you are working towards, tracked against your bags and bank.
+- **Items**: search or browse any item; see how it is crafted, what it is used for, who
+  drops or sells it and which quests reward it.
+- **Quests**: where a quest starts and ends, its objectives, what must be done first and
+  what it leads to.
+- **Dungeons**: entrance, bosses with their loot, and the dungeon's quests with their
+  prerequisite chains.
+- **Professions**: every recipe with its reagents and skill levels.
+- **NPCs**: location, quests, loot and vendor stock.
+
+A separate small **tracker** window shows only what is still missing for your goals.
 
 ## Install
 
@@ -11,10 +22,26 @@ Copy the `GoalNotes` folder into
 
     World of Warcraft/_forever_/Interface/AddOns/
 
-Open the window with `/gn`, the addon compartment button on the minimap, or bind a key
-under Options > Keybindings.
+**Also install QuestieDB (its Forever version)** from CurseForge or Wago. Quests, NPCs,
+drop sources, vendors and map coordinates are not part of the game client; Goal Notes reads
+them from QuestieDB. Without it the Goals, Items (recipes only), Dungeons (boss lists
+only) and Professions tabs still work, and the rest says what is missing.
 
-## Using it
+Open the window with `/gn`, the minimap button, or bind a key under Options > Keybindings.
+
+## Using the wiki
+
+| To | Do |
+| --- | --- |
+| Look something up | Pick a tab, type in the search box, click a result. |
+| Follow a link | Blue lines, item names and bosses open their own page. Back returns. |
+| See full item stats | Hover any item line. |
+| Find something on the map | Click a green "(map)" line: the world map opens with a pin there. |
+| Add an item to your goal | Right-click an item line, or use "Add to goal" at the top of an item page. |
+| Look up a linked item | Click the search box, then shift-click the item anywhere in the game. |
+| Jump from a goal to the wiki | Right-click a goal row > Look up in the wiki. Clicking a tracker line does the same. |
+
+## Using the goal list
 
 | To | Do |
 | --- | --- |
@@ -48,12 +75,13 @@ Goals are saved per character. Settings are shared by all characters.
 
 ## Updating the item database
 
-Item names and types live in `GoalNotes/Data/Items.lua` and profession recipes in
-`GoalNotes/Data/Recipes.lua`. Both are generated from the game's own tables. After a Forever content patch:
+`GoalNotes/Data/` holds item names and types (`Items.lua`), profession recipes
+(`Recipes.lua`) and dungeons with their bosses (`Dungeons.lua`). All three are generated
+from the game's own tables. Quests, NPCs and drops update when you update QuestieDB. After a Forever content patch:
 
     python3 tools/update_db.py
 
-This downloads the newest Forever build from wago.tools and rewrites both files. Then
+This downloads the newest Forever build from wago.tools and rewrites the files. Then
 `/reload` in game. Options:
 
     python3 tools/update_db.py --build 1.60.1.70938   # a specific build
@@ -75,9 +103,13 @@ mistakes; it does not check how anything looks.
 Files:
 
 - `Core.lua`: saved data, goals, item counts, events, shift-click and tooltip hooks
+- `Index.lua`: the name search used for items, quests and NPCs
 - `ItemDB.lua`: item search, filters and recipe lookups
+- `Wiki/Source.lua`: QuestieDB adapter, map pins, dungeon data
+- `Wiki/Pages.lua`: what each wiki page and result list contains
 - `UI/Widgets.lua`: window style and the autocomplete
-- `UI/Main.lua`: the goal list
+- `UI/Main.lua`: the window and the goal list
+- `UI/Browser.lua`: tabs and the wiki view
 - `UI/Compare.lua`: item comparison
 - `UI/Settings.lua`: settings window
 - `UI/Tracker.lua`: the small tracker window

@@ -114,14 +114,16 @@ local function EntryMenu(owner, goal, r)
 	local entry = r.entry
 	if r.label then return end
 	if r.reagent then
-		if not (entry and ns.Recipes.Get(r.id)) then return end -- nothing to offer for a plain material
 		MenuUtil.CreateContextMenu(owner, function(_, root)
 			root:CreateTitle(ns.GetItem(r.id).name)
-			root:CreateButton(r.broken and "Track this item itself" or "Break down into its reagents", function()
-				entry.sub = entry.sub or {}
-				entry.sub[r.id] = not r.broken or nil
-				UI.Layout()
-			end)
+			root:CreateButton("Look up in the wiki", function() ns.Browser.Show("item", r.id) end)
+			if entry and ns.Recipes.Get(r.id) then
+				root:CreateButton(r.broken and "Track this item itself" or "Break down into its reagents", function()
+					entry.sub = entry.sub or {}
+					entry.sub[r.id] = not r.broken or nil
+					UI.Layout()
+				end)
+			end
 		end)
 		return
 	end
@@ -129,6 +131,7 @@ local function EntryMenu(owner, goal, r)
 		if entry.id then
 			local item = ns.GetItem(entry.id)
 			root:CreateTitle(item.name)
+			root:CreateButton("Look up in the wiki", function() ns.Browser.Show("item", entry.id) end)
 			if ns.Recipes.Get(entry.id) then
 				root:CreateButton(entry.craft and "Track the item only" or "Track its reagents", function()
 					entry.craft = not entry.craft or nil
@@ -465,6 +468,7 @@ function UI.Layout()
 	if not frame then return end
 	ns.Tracker.Update()
 	if not frame:IsShown() then return end
+	if ns.Browser.Tab() ~= "goals" then return ns.Browser.Refresh() end
 	for _, pool in ipairs({ goalRows, entryRows }) do
 		for i = 1, #pool do pool[i]:Hide() end
 		pool.used = 0
@@ -550,9 +554,10 @@ local function SearchInput(text)
 	return results
 end
 
-local function FilterMenu(owner)
+-- onChange: what to refresh afterwards (default: the goal list's suggestions)
+local function FilterMenu(owner, onChange)
 	local f = ns.db.filter
-	local function Changed()
+	local Changed = onChange or function()
 		UI.Layout()
 		input:SetFocus()
 		input.ac:Update()
@@ -584,6 +589,8 @@ local function AddText(text)
 	input:SetText("")
 	UI.Layout()
 end
+
+UI.FilterMenu = FilterMenu
 
 ---------------------------------------------------------------------------
 -- Window
@@ -634,7 +641,7 @@ function UI.Init()
 	local pos = ns.db.pos
 	if pos then frame:SetPoint(pos[1], UIParent, pos[2], pos[3], pos[4]) else frame:SetPoint("CENTER") end
 	frame:SetResizable(true)
-	frame:SetResizeBounds(340, 260, 1100, 1000)
+	frame:SetResizeBounds(480, 300, 1200, 1000)
 	frame:RegisterForDrag("LeftButton")
 	frame:SetScript("OnDragStart", function(self)
 		if not ns.db.locked then self:StartMoving() end
@@ -653,21 +660,25 @@ function UI.Init()
 		if editing then StopEditing(false) end
 	end)
 
+	-- everything of the Goals tab lives in this panel; the wiki tabs replace it (UI/Browser.lua)
+	local panel = CreateFrame("Frame", nil, frame)
+	panel:SetAllPoints()
+
 	-- toolbar
-	local newGoal = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	local newGoal = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
 	newGoal:SetSize(90, 22)
-	newGoal:SetPoint("TOPLEFT", 16, -30)
+	newGoal:SetPoint("TOPLEFT", 16, -56)
 	newGoal:SetText("New Goal")
 	newGoal:SetScript("OnClick", function() StartEditing(ns.AddGoal()) end)
 
-	local settings = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	local settings = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
 	settings:SetSize(80, 22)
-	settings:SetPoint("TOPRIGHT", -16, -30)
+	settings:SetPoint("TOPRIGHT", -16, -56)
 	settings:SetText("Settings")
 	settings:SetScript("OnClick", function() ns.Settings.Toggle() end)
 
 	-- column captions
-	headerRow = CreateFrame("Frame", nil, frame)
+	headerRow = CreateFrame("Frame", nil, panel)
 	headerRow:SetHeight(14)
 	headerRow.name = headerRow:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 	headerRow.name:SetPoint("LEFT", 16, 0)
@@ -699,8 +710,8 @@ function UI.Init()
 	line:SetPoint("BOTTOMRIGHT", 0, -3)
 
 	-- list
-	scroll = CreateFrame("ScrollFrame", nil, frame, "ScrollFrameTemplate")
-	scroll:SetPoint("TOPLEFT", 16, -80)
+	scroll = CreateFrame("ScrollFrame", nil, panel, "ScrollFrameTemplate")
+	scroll:SetPoint("TOPLEFT", 16, -106)
 	scroll:SetPoint("BOTTOMRIGHT", -32, 72)
 	if scroll.ScrollBar then
 		scroll.ScrollBar:ClearAllPoints()
@@ -732,16 +743,16 @@ function UI.Init()
 	editBox:SetScript("OnEditFocusLost", function() StopEditing(true) end)
 
 	-- add bar
-	addLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	addLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 	addLabel:SetPoint("BOTTOMLEFT", 18, 46)
 	addLabel:SetPoint("RIGHT", -150, 0)
 	addLabel:SetJustifyH("LEFT")
 	addLabel:SetWordWrap(false)
 
-	filterButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	filterButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
 	filterButton:SetSize(170, 20)
 	filterButton:SetPoint("BOTTOMRIGHT", -26, 42)
-	filterButton:SetScript("OnClick", FilterMenu)
+	filterButton:SetScript("OnClick", function(self) FilterMenu(self) end)
 	filterButton:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_TOP")
 		GameTooltip:SetText("Filter suggestions")
@@ -750,12 +761,12 @@ function UI.Init()
 	end)
 	filterButton:SetScript("OnLeave", GameTooltip_Hide)
 
-	local add = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	local add = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
 	add:SetSize(54, 22)
 	add:SetPoint("BOTTOMRIGHT", -26, 18)
 	add:SetText("Add")
 
-	qtyBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+	qtyBox = CreateFrame("EditBox", nil, panel, "InputBoxTemplate")
 	qtyBox:SetSize(38, 20)
 	qtyBox:SetPoint("RIGHT", add, "LEFT", -6, 0)
 	qtyBox:SetAutoFocus(false)
@@ -771,7 +782,7 @@ function UI.Init()
 	end)
 	qtyBox:SetScript("OnLeave", GameTooltip_Hide)
 
-	input = CreateFrame("EditBox", nil, frame, "SearchBoxTemplate")
+	input = CreateFrame("EditBox", nil, panel, "SearchBoxTemplate")
 	input:SetHeight(20)
 	input:SetPoint("BOTTOMLEFT", 22, 19)
 	input:SetPoint("RIGHT", qtyBox, "LEFT", -12, 0)
@@ -800,6 +811,7 @@ function UI.Init()
 	ns.Settings.Init()
 	ns.Tracker.Init()
 	ns.MinimapButton.Init()
+	ns.Browser.Init(frame, panel)
 	UI.ApplyLock()
 	scroll:SetScript("OnSizeChanged", UI.Layout) -- set last: Layout needs every widget above
 	UI.Layout()

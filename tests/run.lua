@@ -13,7 +13,7 @@ local Mock = {}
 
 local allFrames = {}
 local function NewMock(kind, name, parent)
-	local o = { _kind = kind, _scripts = {}, _shown = true, _text = "", _parent = parent, _w = 300, _h = 20 }
+	local o = { _kind = kind, _scripts = {}, _shown = true, _text = "", _parent = parent, _w = 300, _h = 400 }
 	setmetatable(o, Mock)
 	allFrames[#allFrames + 1] = o
 	if name then _G[name] = o end
@@ -76,6 +76,8 @@ function methods:CreateTexture() return NewMock("Texture", nil, self) end
 function methods:CreateFontString() return NewMock("FontString", nil, self) end
 function methods:GetColorRGB() return 0.1, 0.2, 0.3 end
 function methods:GetCenter() return 0, 0 end
+function methods:GetStringWidth() return #self._text * 6 end
+function methods:GetStringHeight() return 12 end
 function methods:GetEffectiveScale() return 1 end
 function methods:AddLine(text) self._lines = (self._lines or "") .. tostring(text) .. "\n" end
 function methods:SetupColorPickerAndShow(info) info.swatchFunc() info.cancelFunc() end
@@ -216,6 +218,24 @@ MenuUtil = { CreateContextMenu = function(owner, gen) menu = setmetatable({}, Me
 local popup
 function StaticPopup_Show(which, a, b, data) popup = { which = which, data = data } end
 function PlaySound() end
+function InCombatLockdown() return false end
+function UnitFactionGroup() return "Alliance" end
+function debugprofilestop() return 0 end
+function geterrorhandler() return error end
+local pinned, openedMap
+C_Map = {
+	GetAreaInfo = function(id) return ({ [40] = "Westfall", [12] = "Elwynn Forest" })[id] end,
+	CanSetUserWaypointOnMap = function() return true end,
+	SetUserWaypoint = function(point) pinned = point end,
+	OpenWorldMap = function(map) openedMap = map end,
+}
+UiMapPoint = { CreateFromCoordinates = function(map, x, y) return { map = map, x = x, y = y } end }
+C_SuperTrack = { SetSuperTrackedUserWaypoint = function() end }
+local questsDone = {}
+C_QuestLog = {
+	IsQuestFlaggedCompleted = function(id) return questsDone[id] or false end,
+	IsOnQuest = function() return false end,
+}
 function IsShiftKeyDown() return false end
 function IsModifiedClick() return false end
 function GameTooltip_Hide() end
@@ -567,6 +587,220 @@ eq(ns.db.minimapAngle, 45, "dragging moves the button around the minimap")
 ns.db.minimap = false
 ns.ApplyTheme()
 eq(mm:IsShown(), false, "minimap button can be hidden")
+
+-- Wiki without QuestieDB ---------------------------------------------------------------
+local W, B = ns.Wiki, ns.Browser
+local function PageText(page)
+	local out = { page.title }
+	for _, line in ipairs(page.lines) do out[#out + 1] = line.text .. (line.right and (" " .. line.right) or "") end
+	return table.concat(out, "\n")
+end
+local function Has(page, text) return PageText(page):find(text, 1, true) ~= nil end
+local function FindLine(page, pred) for _, l in ipairs(page.lines) do if pred(l) then return l end end end
+
+eq(ns.Q.Available(), false, "no QuestieDB yet")
+frame:Show()
+for _, t in ipairs(W.TABS) do B.Select(t.key) end
+eq(B.Tab(), "npc", "every tab opens without QuestieDB")
+local p = W.Page("item", 15062)
+eq(Has(p, "Crafted with Leatherworking"), true, "item page shows the recipe")
+eq(Has(p, "yellow at 310"), true, "item page shows skill levels")
+eq(Has(p, "30 x "), true, "item page lists reagents")
+eq(Has(p, "Install the QuestieDB addon"), true, "item page explains the missing data")
+p = W.Page("item", 8170)
+eq(Has(p, "Used to make"), true, "material page lists what it makes")
+p = W.Page("item", 15772)
+eq(Has(p, "Teaches"), true, "pattern page links what it teaches")
+eq(Has(W.Page("quest", 1), "Install the QuestieDB addon"), true, "quest page needs QuestieDB")
+local list = W.List("dungeon", "")
+eq(#list > 30, true, "dungeon list is bundled")
+eq(#W.List("dungeon", "dead mines"), 1, "dungeon list filters by name")
+p = W.Page("dungeon", 36)
+eq(p.title, "Deadmines", "dungeon page")
+eq(Has(p, "Edwin VanCleef"), true, "dungeon page lists bosses without QuestieDB")
+eq(Has(p, "Dungeon, 5 players"), true, "dungeon size")
+list = W.List("profession", "")
+eq(#list >= 8, true, "profession list")
+p = W.Page("profession", "Leatherworking")
+eq(#p.lines > 100, true, "profession page lists its recipes")
+eq(p.lines[3].right:find(" / ", 1, true) ~= nil, true, "recipes show yellow / grey skill")
+eq(W.List("profession", "devilsaur leggings")[1].id, 15062, "searching recipes by name")
+eq(W.List("item", "longjaw mud")[1].id, 4592, "item tab search")
+local _, message = W.List("quest", "anything")
+eq(message:find("QuestieDB", 1, true) ~= nil, true, "quest tab explains the missing addon")
+
+-- Wiki with QuestieDB ------------------------------------------------------------------
+local function Entity(data, tables)
+	local E = {}
+	setmetatable(E, { __index = function(_, field)
+		return function(id)
+			local row = data[id]
+			if not row then return nil end
+			local v = row[field]
+			if v == nil and tables[field] == "always" then return {} end
+			if v == nil and not tables[field] then return 0 end
+			return v
+		end
+	end })
+	E.GetAllIds = function()
+		local ids = {}
+		for id in pairs(data) do ids[#ids + 1] = id end
+		table.sort(ids)
+		return ids
+	end
+	E.IdsByName = function(name)
+		local ids = {}
+		for id, row in pairs(data) do if row.name == name then ids[#ids + 1] = id end end
+		table.sort(ids)
+		return #ids > 0 and ids or nil
+	end
+	return E
+end
+local T = { name = true, subName = true, friendlyToFaction = true }
+for _, f in ipairs({ "spawns", "questStarts", "questEnds", "npcDrops", "objectDrops", "itemDrops", "vendors",
+	"questRewards", "relatedQuests", "objectivesText", "preQuestGroup", "preQuestSingle", "childQuests" }) do T[f] = true end
+T.startedBy, T.finishedBy, T.objectives = "always", "always", "always"
+local quests = {
+	[1] = { name = "The Defias Brotherhood", questLevel = 22, requiredLevel = 14, zoneOrSort = 1581,
+		startedBy = { { 100 } }, finishedBy = { { 100 } }, preQuestSingle = { 2 }, objectivesText = { "Kill Edwin VanCleef.", "Bring his head." },
+		objectives = { { { 639 } }, nil, { { 5191 } } }, nextQuestInChain = 4 },
+	[2] = { name = "First Step", questLevel = 10, zoneOrSort = 40, startedBy = { nil, { 900 } }, finishedBy = { { 100 } }, preQuestGroup = { 5, 6 } },
+	[3] = { name = "Horde Only Deadmines", questLevel = 20, zoneOrSort = 1581, requiredRaces = 178, startedBy = {}, finishedBy = {} },
+	[4] = { name = "Aftermath", questLevel = 23, zoneOrSort = 40, startedBy = { { 100 } }, finishedBy = { { 100 } } },
+	[5] = { name = "Earlier Still", questLevel = 9, zoneOrSort = 40, startedBy = { { 100 } }, finishedBy = { { 100 } } },
+	[6] = { name = "And Another", questLevel = 9, zoneOrSort = 40, startedBy = { { 100 } }, finishedBy = { { 100 } } },
+}
+local npcs = {
+	[639] = { name = "Edwin VanCleef", minLevel = 21, maxLevel = 21, rank = 1, zoneID = 1581, spawns = { [1581] = { { -1, -1 } } } },
+	[100] = { name = "Gryan Stoutmantle", subName = "The People's Militia", minLevel = 35, maxLevel = 35, zoneID = 40, friendlyToFaction = "A",
+		spawns = { [40] = { { 56.3, 47.5 }, { 50, 50 } } }, questStarts = { 1, 4, 3 }, questEnds = { 1 } },
+	[200] = { name = "Innkeeper Heather", zoneID = 40, spawns = { [40] = { { 52.9, 53.7 } } } },
+}
+local qitems = {
+	[5191] = { name = "Cruel Barb", npcDrops = { 639 }, questRewards = {} },
+	[4592] = { name = "Longjaw Mud Snapper", vendors = { 200 } },
+	[8170] = { name = "Rugged Leather", npcDrops = { 639, 100 }, objectDrops = { 900 } },
+	[15062] = { name = "Devilsaur Leggings", questRewards = { 1 }, startQuest = 4 },
+}
+local objects = { [900] = { name = "Wanted Poster", zoneID = 40, spawns = { [40] = { { 54, 31 } } }, questStarts = { 2 } } }
+LibQuestieDB = {
+	Quest = Entity(quests, T), Npc = Entity(npcs, T), Item = Entity(qitems, T), Object = Entity(objects, T),
+	RequireContract = function() return true end,
+	Enum = { factionRaceMasks = { Alliance = 77, Horde = 178 } },
+	Support = { Get = function(name)
+		if name ~= "ZoneDB" then return nil end
+		return {
+			instanceIdToAreaId = { [34] = 717 }, -- Deadmines deliberately absent: found by name instead
+			private = {
+				dungeons = { [1581] = { "The Deadmines", nil, 40, { { 40, 42.6, 71.8 } } } },
+				areaIdToUiMapId = "return { [40] = 1436, [12] = 1429 }",
+				areaIdToUiMapIdOverride = "return { [0] = 0 }",
+			},
+		}
+	end },
+}
+ns.Q.Init()
+eq(ns.Q.Available(), true, "QuestieDB detected")
+
+_, message = W.List("quest", "defias")
+eq(message, "Loading data...", "quest names index in the background")
+RunTimers()
+eq(ns.Q.NamesReady(), true, "name indexes ready")
+list = W.List("quest", "defias")
+eq(list[1].id, 1, "quest search")
+eq(#W.List("quest", "horde only"), 0, "other faction's quests are hidden")
+eq(W.List("npc", "vancleef")[1].id, 639, "npc search")
+
+p = W.Page("quest", 1)
+eq(p.title, "[22] The Defias Brotherhood", "quest title with level")
+eq(Has(p, "Level 22, requires level 14, The Deadmines"), true, "quest facts")
+eq(Has(p, "Gryan Stoutmantle"), true, "quest giver")
+eq(Has(p, "Westfall  56.3, 47.5"), true, "quest giver location")
+eq(Has(p, "Kill Edwin VanCleef. Bring his head."), true, "objective text")
+eq(Has(p, "Required first"), true, "prerequisites section")
+local order = {}
+for i, l in ipairs(p.lines) do if l.kind == "quest" then order[#order + 1] = l.id .. "@" .. l.indent end end
+eq(table.concat(order, " "), "2@1 5@2 6@2 4@1", "prerequisite chain is nested, then what it leads to")
+eq(Has(p, "all of:"), true, "group prerequisites are labelled")
+eq(Has(W.Page("quest", 4), "Required first"), false, "no prerequisite section when there are none")
+questsDone[2] = true
+eq(Has(W.Page("quest", 1), "First Step |cff40ff40(done)|r"), true, "completed prerequisites are marked")
+eq(Has(W.Page("quest", 2), "Wanted Poster"), true, "quests started by objects")
+eq(Has(W.Page("quest", 3), "Not available to your faction"), true, "faction warning")
+
+eq(Has(p, "Loading data..."), true, "rewards wait for the loot index")
+RunTimers()
+eq(ns.Q.LootReady(), true, "loot index ready")
+p = W.Page("quest", 1)
+eq(FindLine(p, function(l) return l.item == 15062 end) ~= nil, true, "quest rewards")
+
+p = W.Page("item", 5191)
+eq(Has(p, "Dropped by"), true, "item drop sources")
+eq(FindLine(p, function(l) return l.kind == "npc" and l.id == 639 end).right, "The Deadmines", "drop source shows its zone")
+p = W.Page("item", 4592)
+eq(Has(p, "Sold by") and Has(p, "Innkeeper Heather"), true, "vendors")
+p = W.Page("item", 8170)
+eq(Has(p, "Found in") and Has(p, "Wanted Poster"), true, "object sources")
+p = W.Page("item", 15062)
+eq(Has(p, "Quest reward") and Has(p, "Starts a quest"), true, "quest links on items")
+eq(Has(W.Page("item", 15417), "No source recorded"), true, "items without any source say so")
+
+p = W.Page("npc", 639)
+eq(Has(p, "Level 21 elite"), true, "npc level and rank")
+eq(Has(p, "Inside The Deadmines"), true, "instance spawns have no coordinates")
+eq(FindLine(p, function(l) return l.item == 5191 end) ~= nil, true, "npc drops")
+eq(p.lines[#p.lines].item, 8170, "common drops sort below better loot")
+p = W.Page("npc", 100)
+eq(Has(p, "<The People's Militia>") and Has(p, "Friendly to Alliance"), true, "npc details")
+eq(Has(p, "(2 places)"), true, "spawn count")
+eq(Has(p, "Horde Only"), false, "npc quest lists hide the other faction")
+eq(Has(W.Page("npc", 200), "Sells"), true, "vendor stock")
+eq(Has(W.Page("object", 900), "Contains"), true, "object contents")
+
+p = W.Page("dungeon", 36)
+local entrance = FindLine(p, function(l) return l.area == 40 end)
+eq(entrance.text, "Westfall  42.6, 71.8", "dungeon entrance")
+eq(FindLine(p, function(l) return l.kind == "npc" and l.id == 639 end).right, "21 elite", "bosses link to their NPC")
+order = {}
+for _, l in ipairs(p.lines) do if l.kind == "quest" then order[#order + 1] = l.id .. "@" .. l.indent end end
+eq(table.concat(order, " "), "1@1 2@2 5@3 6@3", "dungeon quests with what is needed first")
+
+-- driving the browser itself
+B.Select("dungeon")
+local function Rows(parentKind, pred)
+	local found = {}
+	for _, f in ipairs(allFrames) do
+		if f._kind == "Button" and f:IsShown() and pred(f) then found[#found + 1] = f end
+	end
+	return found
+end
+local dungeonRow = Rows("Button", function(f) return rawget(f, "entry") and f.entry.kind == "dungeon" and f.entry.id == 36 end)[1]
+Fire(dungeonRow, "OnClick", "LeftButton")
+local function PageRow(pred) return Rows("Button", function(f) return rawget(f, "line") and pred(f.line) end)[1] end
+local mapRow = PageRow(function(l) return l.area == 40 end)
+Fire(mapRow, "OnEnter")
+Fire(mapRow, "OnClick", "LeftButton")
+eq(openedMap, 1436, "map opens on the right zone")
+eq(pinned.x, 0.426, "pin uses 0-1 coordinates")
+Fire(PageRow(function(l) return l.kind == "npc" and l.id == 639 end), "OnClick", "LeftButton")
+local barb = PageRow(function(l) return l.item == 5191 end)
+eq(barb ~= nil, true, "following a boss link shows its loot")
+Fire(barb, "OnEnter")
+local before = #ns.SelectedGoal().entries
+Fire(barb, "OnClick", "RightButton")
+eq(#ns.SelectedGoal().entries, before + 1, "right-click adds loot to the goal")
+Fire(barb, "OnClick", "LeftButton")
+eq(PageRow(function(l) return l.kind == "npc" and l.id == 639 end) ~= nil, true, "item page links back to the boss")
+ns.Browser.Show("quest", 1)
+eq(B.Tab(), "quest", "jumping to a page switches tab")
+for _, t in ipairs(W.TABS) do
+	B.Select(t.key)
+	for _, f in ipairs(allFrames) do
+		if f._kind == "EditBox" and f._parent and f:IsShown() and f._scripts.OnTextChanged then end
+	end
+end
+B.Select("goals")
+ns.UI.Layout()
 
 -- Settings and slash commands ------------------------------------------------------
 SlashCmdList.GOALNOTES("config")

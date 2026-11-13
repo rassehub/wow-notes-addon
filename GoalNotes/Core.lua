@@ -6,7 +6,7 @@ BINDING_NAME_GOALNOTES_TOGGLE = "Toggle Goal Notes"
 -- Account-wide settings. Goals themselves are per character (GoalNotesCharDB),
 -- because bags and bank are per character.
 ns.defaults = {
-	width = 460, height = 420,
+	width = 620, height = 460,
 	scale = 1,
 	opacity = 0.9,
 	fontSize = 12,
@@ -71,7 +71,7 @@ function ns.GetItem(id)
 		local _, iType, iSub, iLoc, iIcon = C_Item.GetItemInfoInstant(id)
 		return {
 			id = id, pending = true,
-			name = ns.ItemDB.GetName(id) or ("Item " .. id),
+			name = ns.ItemDB.GetName(id) or (ns.Q.Available() and ns.Q.Item.name(id)) or ("Item " .. id),
 			quality = ns.ItemDB.GetQuality(id) or 1,
 			link = "item:" .. id, type = iType, subType = iSub, equipLoc = iLoc, icon = iIcon,
 		}
@@ -390,6 +390,7 @@ events:SetScript("OnEvent", function(_, event, arg1)
 	if type(ns.char.goals) ~= "table" then ns.char.goals = {} end
 	if #ns.char.goals == 0 then ns.AddGoal("My Goals") end
 
+	ns.Q.Init()
 	HookLinks()
 	HookTooltips()
 	ns.UI.Init()

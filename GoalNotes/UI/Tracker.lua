@@ -32,7 +32,9 @@ local function CreateLine(i)
 		frame:StopMovingOrSizing()
 		SavePlace()
 	end)
-	line:SetScript("OnClick", function() ns.UI.frame:Show() end)
+	line:SetScript("OnClick", function(self)
+		if self.id then ns.Browser.Show("item", self.id) else ns.UI.frame:Show() end
+	end)
 	line:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
 		if self.id then
@@ -42,7 +44,7 @@ local function CreateLine(i)
 		else
 			GameTooltip:SetText(ns.TITLE)
 		end
-		GameTooltip:AddLine("Click to open Goal Notes. Drag to move.", 0.5, 0.5, 0.5)
+		GameTooltip:AddLine(self.id and "Click to look it up. Drag to move." or "Click to open Goal Notes. Drag to move.", 0.5, 0.5, 0.5)
 		GameTooltip:Show()
 	end)
 	line:SetScript("OnLeave", GameTooltip_Hide)

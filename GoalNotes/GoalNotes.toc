@@ -1,20 +1,26 @@
 ## Interface: 16001
 ## Title: Goal Notes
-## Notes: Item goal lists with a built-in item database, live bag and bank tracking, and gear comparison.
+## Notes: In-game wiki (items, quests, dungeons, professions, NPCs) with goal lists that track your bags and bank.
 ## Author: rassehub
-## Version: 1.1.0
+## Version: 2.0.0
 ## IconTexture: Interface\Icons\INV_Misc_Note_01
+## OptionalDeps: QuestieDB
 ## SavedVariables: GoalNotesDB
 ## SavedVariablesPerCharacter: GoalNotesCharDB
 ## AddonCompartmentFunc: GoalNotes_OnAddonCompartmentClick
 
 Data\Items.lua
 Data\Recipes.lua
+Data\Dungeons.lua
 Core.lua
+Index.lua
 ItemDB.lua
+Wiki\Source.lua
+Wiki\Pages.lua
 UI\Widgets.lua
 UI\Main.lua
 UI\Compare.lua
 UI\Settings.lua
 UI\Tracker.lua
 UI\Minimap.lua
+UI\Browser.lua
