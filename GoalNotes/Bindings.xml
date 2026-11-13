@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="GOALNOTES_TOGGLE">
+		GoalNotes_Toggle()
+	</Binding>
+</Bindings>
