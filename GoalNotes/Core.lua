@@ -37,8 +37,8 @@ ns.defaults = {
 	colWidth = {}, -- column widths changed by dragging, by "tab:column" ("goal:column" on the Goals tab)
 	-- Icons on the world map. show: gathering nodes; off: whole kinds ("Mining"), hidden: by
 	-- "Kind/Node name". goals: where to get what the tracked goals still miss. size: of an icon.
-	-- minimap: the same icons around the player on the minimap.
-	nodes = { show = false, goals = true, minimap = true, size = 14, off = {}, hidden = {} },
+	-- minimap: the same icons around the player on the minimap, except closer than `near` yards.
+	nodes = { show = false, goals = true, minimap = true, near = 80, size = 14, off = {}, hidden = {} },
 	nearFirst = true, -- "Sold by" and "Dropped by": what is closest in the player's zone first
 	sort = {}, sortDesc = {}, -- per tab: sort key, and whether it is reversed
 	folded = {}, -- wiki page sections that are collapsed, by "kind:Section"

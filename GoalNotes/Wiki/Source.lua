@@ -108,7 +108,10 @@ function Q.LootReady()
 	if not lib or Q.loot then return false end
 	Q.loot = "building"
 	Q.drops, Q.sells, Q.contains, Q.rewards = {}, {}, {}, {}
-	local function Collect(into, sources, itemId)
+	local has = { npcDrops = {}, vendors = {}, objectDrops = {}, questRewards = {} }
+	local function Collect(into, field, itemId)
+		local sources = Q.Item[field](itemId)
+		if sources and #sources > 0 then has[field][itemId] = true end
 		for _, source in ipairs(sources or {}) do
 			into[source] = into[source] or {}
 			table.insert(into[source], itemId)
@@ -116,17 +119,26 @@ function Q.LootReady()
 	end
 	Run(function()
 		for n, id in ipairs(Q.Item.GetAllIds()) do
-			Collect(Q.drops, Q.Item.npcDrops(id), id)
-			Collect(Q.sells, Q.Item.vendors(id), id)
-			Collect(Q.contains, Q.Item.objectDrops(id), id)
-			Collect(Q.rewards, Q.Item.questRewards(id), id)
+			Collect(Q.drops, "npcDrops", id)
+			Collect(Q.sells, "vendors", id)
+			Collect(Q.contains, "objectDrops", id)
+			Collect(Q.rewards, "questRewards", id)
 			if n % STEP == 0 then coroutine.yield() end
 		end
 	end, function()
-		Q.loot = "ready"
+		Q.has, Q.loot = has, "ready"
 		ns.Wiki.DataReady()
 	end)
 	return false
+end
+
+-- Whether QuestieDB knows a source of this kind ("vendors", "npcDrops", "questRewards") for
+-- an item. The item filter asks this for every item in the game: answered from a set once
+-- Q.LootReady() has built it (asking starts that), from QuestieDB directly until then.
+function Q.ItemHas(field, id)
+	if Q.LootReady() then return Q.has[field][id] end
+	local from = Q.Item[field](id)
+	return from ~= nil and #from > 0
 end
 
 ---------------------------------------------------------------------------

@@ -220,13 +220,14 @@ ItemDB.SLOTS = {
 }
 ItemDB.QUALITIES = { { 1, "Common" }, { 2, "Uncommon" }, { 3, "Rare" }, { 4, "Epic" }, { 5, "Legendary" } }
 -- field: the QuestieDB item field that must be set (those sources need QuestieDB)
+-- icon: the source has a one-click button above the Items list (see Browser.lua)
 ItemDB.SOURCES = {
-	{ key = "crafted", label = "Crafted by a profession", short = "crafted" },
+	{ key = "crafted", label = "Crafted by a profession", short = "crafted", icon = "Interface\\Icons\\Trade_BlackSmithing" },
 	{ key = "found", label = "Not crafted", short = "not crafted" },
-	{ key = "gathered", label = "Gathered (ore, herbs)", short = "gathered" },
-	{ key = "quest", label = "Quest reward", short = "quest reward", field = "questRewards" },
-	{ key = "drop", label = "Dropped by a creature", short = "dropped", field = "npcDrops" },
-	{ key = "vendor", label = "Sold by a vendor", short = "sold", field = "vendors" },
+	{ key = "gathered", label = "Gathered (ore, herbs)", short = "gathered", icon = "Interface\\Icons\\Trade_Mining" },
+	{ key = "quest", label = "Quest reward", short = "quest reward", field = "questRewards", icon = "Interface\\GossipFrame\\AvailableQuestIcon" },
+	{ key = "drop", label = "Dropped by a creature", short = "dropped", field = "npcDrops", icon = "Interface\\Icons\\INV_Misc_Bone_01" },
+	{ key = "vendor", label = "Sold by a vendor", short = "sold", field = "vendors", icon = "Interface\\Icons\\INV_Misc_Coin_01" },
 }
 
 local SETS = { "types", "subs", "slots", "quality", "stats", "sources" }
@@ -341,8 +342,7 @@ function ItemDB.MatchesFilter(id, f)
 			or (f.sources.gathered and ns.Nodes.KindOfItem(id) ~= nil)
 		-- asked last: the only test that goes to QuestieDB
 		for _, source in ipairs(not ok and ns.Q.Available() and ItemDB.SOURCES or {}) do
-			local from = source.field and f.sources[source.key] and ns.Q.Item[source.field](id)
-			if from and #from > 0 then ok = true break end
+			if source.field and f.sources[source.key] and ns.Q.ItemHas(source.field, id) then ok = true break end
 		end
 		if not ok then return false end
 	end

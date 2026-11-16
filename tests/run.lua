@@ -1656,6 +1656,16 @@ eq(ns.Nodes.MiniUpdate(), 1, "the minimap shows goal sources within its reach (t
 local standing = C_Map.GetPlayerMapPosition
 C_Map.GetPlayerMapPosition = function() return { GetXY = function() return 0.529, 0.53 end } end
 eq(ns.Nodes.MiniUpdate(), 0, "and hides an icon once the player is next to it")
+C_Map.GetPlayerMapPosition = function() return { GetXY = function() return 0.529, 0.507 end } end -- 90 yards north
+eq(ns.db.nodes.near .. " " .. ns.Nodes.MiniUpdate(), "80 1", "the hide radius is 80 yards unless changed")
+Fire(mm, "OnClick", "RightButton")
+menu:Find("Hide on the minimap when closer than"):Click("100 yards")
+eq(ns.db.nodes.near .. " " .. ns.Nodes.MiniUpdate(), "100 0", "the minimap button's menu sets the hide radius")
+Minimap.GetZoom = function() return 4 end -- 200 yards across: reaches 100, so the radius is capped at 50
+C_Map.GetPlayerMapPosition = function() return { GetXY = function() return 0.529, 0.517 end } end -- 60 yards
+eq(ns.Nodes.MiniUpdate(), 1, "zoomed in, the radius is at most half the minimap's reach")
+Minimap.GetZoom = function() return 0 end
+ns.db.nodes.near = 80
 C_Map.GetPlayerMapPosition = function() return { GetXY = function() return 0.1, 0.1 end } end
 eq(ns.Nodes.MiniUpdate(), 0, "or when it is beyond the minimap's reach")
 C_Map.GetPlayerMapPosition = standing
@@ -1671,6 +1681,27 @@ DB.ResetFilter()
 ns.db.filter.sources.gathered = true
 eq(DB.MatchesFilter(2770) and not DB.MatchesFilter(8170), true, "the source filter knows gathered items")
 DB.ResetFilter()
+-- the same filters, one click each, above the Items list
+B.Select("item")
+local function Lit(key) return C.sources[key].active end
+eq(C.sources.vendor:IsShown() and C.sources.found == nil, true, "the Items tab has a button per source")
+Fire(C.sources.vendor, "OnClick", "LeftButton")
+list = W.List("item", "")
+local vendorOnly = #list
+eq(tostring(ns.db.filter.sources.vendor) .. " " .. Summary() .. " " .. tostring(Lit("vendor")) .. " " .. tostring(#list > 0 and DB.MatchesFilter(4592) and not DB.MatchesFilter(2770)),
+	"true sold true true", "a click on Vendor lists what vendors sell, and lights the button")
+Fire(C.sources.gathered, "OnClick", "LeftButton")
+eq(Summary() .. " " .. tostring(#W.List("item", "") > vendorOnly and DB.MatchesFilter(2770)), "gathered, sold true", "a second button adds its items")
+Fire(C.sources.vendor, "OnClick", "LeftButton")
+Fire(C.sources.gathered, "OnClick", "LeftButton")
+eq(Summary() .. " " .. tostring(Lit("vendor")), "No filter false", "a second click switches a source off again")
+for key, want in pairs({ crafted = 15062, quest = 2244, drop = 5191 }) do
+	Fire(C.sources[key], "OnClick", "LeftButton")
+	eq(DB.MatchesFilter(want), true, "the " .. key .. " button filters")
+	Fire(C.sources[key], "OnClick", "LeftButton")
+end
+B.Select("quest")
+eq(C.sources.vendor:IsShown(), false, "other tabs have no source buttons")
 mapGoal.untracked = true
 ns.Nodes.GoalsChanged()
 eq(ns.Nodes.Draw(), 0, "untracked goals put nothing on the map")

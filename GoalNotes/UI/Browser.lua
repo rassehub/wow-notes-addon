@@ -9,6 +9,7 @@ ns.Browser = Browser
 local frame, goalsPanel, panel
 local tabButtons = {}
 local listHeader, listTotal
+local sourceButtons = {} -- the one-click source filters above the Items list, by ItemDB.SOURCES key
 local search, filterIcon, sortIcon, summary, clearButton, minBox, maxBox, listFrame, listMessage, splitter
 local title, backButton, addButton, compareButton, pageScroll, pageContent, pageMessage
 local listRows, pageRows = {}, {}
@@ -533,7 +534,7 @@ end
 
 -- for the tests
 function Browser.Controls()
-	return { header = listHeader, splitter = splitter, search = search, filter = filterIcon, sort = sortIcon, summary = summary, clear = clearButton, minLevel = minBox, maxLevel = maxBox }
+	return { header = listHeader, splitter = splitter, search = search, filter = filterIcon, sort = sortIcon, summary = summary, sources = sourceButtons, clear = clearButton, minLevel = minBox, maxLevel = maxBox }
 end
 
 function Browser.Current()
@@ -552,6 +553,7 @@ function Browser.UpdateSummary()
 	filterIcon:SetActive(#parts > 0)
 	sortIcon:SetActive(sorted ~= nil)
 	clearButton:SetShown(#parts > 0)
+	for key, b in pairs(sourceButtons) do b:SetActive(ns.db.filter.sources[key]) end
 end
 
 function Browser.Layout()
@@ -579,9 +581,20 @@ function Browser.Layout()
 	search:SetWidth(right - 22 - 4)
 	-- below it: what is filtered, a button to clear it, and the level range of item filters
 	local itemFilter = ns.Wiki.ItemFilter(tab)
+	-- the Items tab has a row of source buttons between the search box and the list
+	local top, x = tab == "item" and 22 or 0, 18
+	for _, source in ipairs(ns.ItemDB.SOURCES) do
+		local b = sourceButtons[source.key]
+		if b then
+			b:SetShown(top > 0 and (not source.field or ns.Q.Available()))
+			b:SetPoint("TOPLEFT", x, -82)
+			if b:IsShown() then x = x + 22 end
+		end
+	end
 	listFrame:ClearAllPoints()
 	listHeader:SetWidth(listWidth)
-	listFrame:SetPoint("TOPLEFT", 16, -100)
+	listHeader:SetPoint("TOPLEFT", 16, -84 - top)
+	listFrame:SetPoint("TOPLEFT", 16, -100 - top)
 	listFrame:SetPoint("BOTTOMLEFT", 16, (hasFilter or hasSort) and 42 or 18)
 	listFrame:SetWidth(listWidth)
 	summary:SetShown(hasFilter or hasSort)
@@ -683,6 +696,20 @@ function Browser.Init(mainFrame, goals)
 	local Changed = ListChanged
 	filterIcon = ns.Filters.FilterButton(panel, Browser.Tab, Changed)
 	sortIcon = ns.Filters.SortButton(panel, Browser.Tab, Changed)
+
+	for _, source in ipairs(ns.ItemDB.SOURCES) do
+		if source.icon then
+			local b = ns.Filters.Button(panel, "ui-questtrackerbutton-filter", "ui-questtrackerbutton-filter-pressed", source.label,
+				function() return "Click to list only these. Several lit: items from any of them." end,
+				function()
+					ns.db.filter.sources[source.key] = not ns.db.filter.sources[source.key] or nil
+					Changed()
+				end)
+			for _, set in ipairs({ "SetNormalTexture", "SetPushedTexture", "SetHighlightTexture" }) do b[set](b, source.icon) end
+			b:SetActive(false)
+			sourceButtons[source.key] = b
+		end
+	end
 
 	-- one line under the list says what is filtered and how it is sorted
 	summary = CreateFrame("Button", nil, panel)

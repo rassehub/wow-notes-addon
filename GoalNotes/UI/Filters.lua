@@ -237,6 +237,7 @@ function Filters.Button(parent, atlas, pushedAtlas, title, describe, onClick)
 	end)
 	b:SetScript("OnLeave", GameTooltip_Hide)
 	function b:SetActive(active)
+		self.active = active and true or false
 		local texture = self:GetNormalTexture()
 		if texture then texture:SetDesaturated(not active) end
 		self:SetAlpha(active and 1 or 0.7)

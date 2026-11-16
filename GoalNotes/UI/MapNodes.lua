@@ -181,14 +181,15 @@ function Nodes.Draw()
 end
 
 ---------------------------------------------------------------------------
--- The minimap: the same icons, for the zone the player is in. An icon closer than NEAR
--- yards is hidden: that close the game's own tracking (Find Minerals, Find Herbs) shows on
--- the minimap whether the node is really there.
+-- The minimap: the same icons, for the zone the player is in. An icon closer than
+-- ns.db.nodes.near yards is hidden: that close the game's own tracking (Find Minerals, Find
+-- Herbs) shows on the minimap whether the node is really there. Zoomed in, the radius is at
+-- most half of what the minimap reaches, so the outer half always has icons.
 -- shortcut: only the zone the player is in (nothing across a zone border), a round minimap
 -- is assumed, and at most MINI_PINS icons, the first found.
 ---------------------------------------------------------------------------
 
-local NEAR, MINI_PINS, MINI_SIZE = 40, 60, 12
+local MINI_PINS, MINI_SIZE = 60, 12
 -- how many yards the minimap is across at each zoom level
 local ACROSS = {
 	outdoor = { 466.67, 400, 333.33, 266.67, 200, 133.33 },
@@ -215,13 +216,14 @@ function Nodes.MiniUpdate()
 		local px, py = pos:GetXY()
 		local reach = (ACROSS[IsIndoors() and "indoor" or "outdoor"][Minimap:GetZoom() + 1] or 300) / 2
 		local scale = Minimap:GetWidth() / 2 / reach
+		local near = math.min(db.near, reach * 0.5)
 		-- a rotating minimap keeps the way the player faces on top
 		local facing = GetCVar("rotateMinimap") == "1" and GetPlayerFacing() or 0
 		local sin, cos = math.sin(facing), math.cos(facing)
 		for i = 1, #miniList, 3 do
 			local east, north = (miniList[i] - px) * width, (py - miniList[i + 1]) * height
 			local distance = (east * east + north * north) ^ 0.5
-			if distance > NEAR and distance < reach * 0.95 and used < MINI_PINS then
+			if distance > near and distance < reach * 0.95 and used < MINI_PINS then
 				used = used + 1
 				local pin = miniPins[used] or mini:CreateTexture(nil, "OVERLAY")
 				miniPins[used] = pin
@@ -339,6 +341,10 @@ function Nodes.MenuSections(root)
 		db.minimap = not db.minimap
 		Nodes.Refresh()
 	end)
+	local near = root:CreateButton("Hide on the minimap when closer than")
+	for _, yards in ipairs({ 40, 60, 80, 100 }) do
+		near:CreateRadio(yards .. " yards", function() return db.near == yards end, function() db.near = yards end)
+	end
 	root:CreateCheckbox("Show gathering nodes", function() return db.show end, function()
 		db.show = not db.show
 		Nodes.Refresh()
