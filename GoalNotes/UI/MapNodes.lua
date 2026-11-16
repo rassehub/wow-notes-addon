@@ -56,33 +56,42 @@ local function View(map, canvas)
 	return x - w, y - h, x + w, y + h
 end
 
--- What the tracked goals still miss, ready to draw: forced = { [node type] = true } for the
--- items that are gathered, byMap = { [uiMapID] = { x, y, icon, ... } } for the others (the
--- spawns of who sells or drops them: Q.ItemSpawns). Rebuilt after Nodes.GoalsChanged().
-local goalPins
-
-local function GoalPins()
-	if goalPins then return goalPins end
-	goalPins = { forced = {}, byMap = {} }
-	local seen = {}
+-- The items the tracked goals still miss, each once.
+local function Missing()
+	local ids, seen = {}, {}
 	for _, goal in ipairs(ns.Goals()) do
 		for _, row in ipairs(goal.untracked and {} or ns.GoalRows(goal)) do
 			local id = row.id
 			if id and not seen[id] and not ns.RowDone(row) then
 				seen[id] = true
-				local gathered = false
-				for index, nodeType in ipairs(ns.NodeTypes) do
-					if nodeType[3] == id then goalPins.forced[index], gathered = true, true end
-				end
-				local icon = C_Item.GetItemIconByID(id)
-				for area, points in pairs(not gathered and icon and ns.Q.ItemSpawns(id) or {}) do
-					local list = goalPins.byMap[ns.Q.UiMap(area) or 0] or {}
-					goalPins.byMap[ns.Q.UiMap(area) or 0] = list
-					for _, p in ipairs(points) do
-						if p[1] >= 0 then
-							list[#list + 1], list[#list + 2], list[#list + 3] = p[1] / 100, p[2] / 100, icon
-						end
-					end
+				ids[#ids + 1] = id
+			end
+		end
+	end
+	return ids
+end
+
+-- What the tracked goals still miss, ready to draw: forced = { [node type] = true } for the
+-- items that are gathered, byMap = { [uiMapID] = { x, y, icon, item, ... } } for the others
+-- (the spawns of who sells or drops them: Q.ItemSpawns). Rebuilt after Nodes.GoalsChanged().
+local goalPins
+
+local function GoalPins()
+	if goalPins then return goalPins end
+	goalPins = { forced = {}, byMap = {} }
+	for _, id in ipairs(Missing()) do
+		local gathered = false
+		for index, nodeType in ipairs(ns.NodeTypes) do
+			if nodeType[3] == id then goalPins.forced[index], gathered = true, true end
+		end
+		local icon = C_Item.GetItemIconByID(id)
+		for area, points in pairs(not gathered and icon and ns.Q.ItemSpawns(id) or {}) do
+			local list = goalPins.byMap[ns.Q.UiMap(area) or 0] or {}
+			goalPins.byMap[ns.Q.UiMap(area) or 0] = list
+			for _, p in ipairs(points) do
+				if p[1] >= 0 then
+					local n = #list
+					list[n + 1], list[n + 2], list[n + 3], list[n + 4] = p[1] / 100, p[2] / 100, icon, id
 				end
 			end
 		end
@@ -96,23 +105,27 @@ function Nodes.GoalsChanged()
 	Nodes.Refresh()
 end
 
--- Feeds Add(x, y, icon) every icon of zone `id`, x and y as fractions of the zone: the
--- sources of goal items, then the gathering nodes that are switched on.
+-- Feeds Add(x, y, icon, what) every icon of zone `id`, x and y as fractions of the zone: the
+-- sources of goal items (what: the item's id), then the gathering nodes that are switched
+-- on (what: minus the node type's index in ns.NodeTypes).
 local function ZoneIcons(id, goals, Add)
 	local db, list = ns.db.nodes, goals.byMap[id]
-	for i = 1, list and #list or 0, 3 do Add(list[i], list[i + 1], list[i + 2]) end
+	for i = 1, list and #list or 0, 4 do Add(list[i], list[i + 1], list[i + 2], list[i + 3]) end
 	for index, packed in pairs(byMap[id] or {}) do
 		local nodeType = ns.NodeTypes[index]
 		if nodeType and (goals.forced[index] or (db.show and Shown(nodeType))) then
 			local icon = Icon(nodeType)
-			for px, py in packed:gmatch("(%d%d%d)(%d%d%d)") do Add(px / 1000, py / 1000, icon) end
+			for px, py in packed:gmatch("(%d%d%d)(%d%d%d)") do Add(px / 1000, py / 1000, icon, -index) end
 		end
 	end
 end
 
 local NO_GOALS = { forced = {}, byMap = {} }
 
-local found = {} -- x, y, icon, x, y, icon, ... of what is in view; reused between draws
+local found = {} -- x, y, icon, what, ... of what is in view; reused between draws
+-- what was drawn, for the tooltip: x, y (on the canvas, from its top left), what, ...
+local drawn, drawnCount, drawnSize = {}, 0, 0
+local hover -- the one button that makes every icon hoverable: see Nodes.HoverAt
 
 function Nodes.Draw()
 	queued = false
@@ -146,11 +159,11 @@ function Nodes.Draw()
 				end
 			end
 			if not (x0 and x1 and x1 >= left and x0 <= right and y1 >= top and y0 <= bottom) then return end
-			ZoneIcons(id, goals, function(px, py, icon)
+			ZoneIcons(id, goals, function(px, py, icon, what)
 				local x, y = x0 + px * (x1 - x0), y0 + py * (y1 - y0)
 				if x >= left and x <= right and y >= top and y <= bottom then
-					found[n + 1], found[n + 2], found[n + 3] = x, y, icon
-					n = n + 3
+					found[n + 1], found[n + 2], found[n + 3], found[n + 4] = x, y, icon, what
+					n = n + 4
 				end
 			end)
 		end
@@ -161,11 +174,13 @@ function Nodes.Draw()
 		end
 		-- Too many for the screen (zoomed far out): every zone keeps an even share of its
 		-- icons, instead of some zones getting all and others none.
-		local step = math.max(1, math.ceil(n / 3 / MAX_PINS))
+		local step = math.max(1, math.ceil(n / 4 / MAX_PINS))
 		local width, height = canvas:GetWidth(), canvas:GetHeight()
 		-- the canvas grows with the zoom; the icons should not
 		local size = db.size * map.ScrollContainer:GetEffectiveScale() / canvas:GetEffectiveScale()
-		for i = 1, n, 3 * step do
+		drawnSize = size
+		for i = 1, n, 4 * step do
+			drawn[used * 3 + 1], drawn[used * 3 + 2], drawn[used * 3 + 3] = found[i] * width, found[i + 1] * height, found[i + 3]
 			used = used + 1
 			local pin = pins[used] or layer:CreateTexture(nil, "OVERLAY")
 			pins[used] = pin
@@ -177,7 +192,85 @@ function Nodes.Draw()
 		end
 	end
 	for i = used + 1, #pins do pins[i]:Hide() end
+	drawnCount = used
 	return used
+end
+
+-- The icons are bare textures, a thousand of them: instead of a frame each, one invisible
+-- button is moved under the cursor whenever that is on an icon. x, y: a point on the canvas,
+-- in its own units from the top left. Shows the tooltip of the icon there (the closest one,
+-- where they overlap) and returns its name; a click on the button opens the item's page.
+function Nodes.HoverAt(x, y)
+	local best, bestDistance = nil, (drawnSize / 2) ^ 2
+	for i = 1, drawnCount * 3, 3 do
+		local distance = (drawn[i] - x) ^ 2 + (drawn[i + 1] - y) ^ 2
+		if distance <= bestDistance then best, bestDistance = i, distance end
+	end
+	if not best then
+		if hover:IsShown() then
+			hover:Hide()
+			GameTooltip:Hide()
+		end
+		hover.what = nil
+		return nil
+	end
+	local what = drawn[best + 2]
+	hover:SetSize(drawnSize, drawnSize)
+	hover:ClearAllPoints()
+	hover:SetPoint("CENTER", layer, "TOPLEFT", drawn[best], -drawn[best + 1])
+	hover:Show()
+	if hover.what ~= what then
+		local nodeType = what < 0 and ns.NodeTypes[-what]
+		hover.what = what
+		hover.name = nodeType and nodeType[2] or ns.ItemDB.GetName(what) or ("Item " .. what)
+		hover.item = nodeType and (nodeType[3] > 0 and nodeType[3] or nil) or what
+		GameTooltip:SetOwner(hover, "ANCHOR_RIGHT")
+		GameTooltip:SetText(hover.name)
+		GameTooltip:AddLine(nodeType and nodeType[1] or "Your goals miss this: sold or dropped here", 1, 1, 1)
+		if hover.item then GameTooltip:AddLine("Click to open its page.", 0.5, 0.5, 0.5) end
+		GameTooltip:Show()
+	end
+	return hover.name
+end
+
+-- Our lines on the card OpenMap puts on a dungeon's map (info: see OpenMap's docs/api.md):
+-- what the tracked goals still miss that a boss in there drops, and the quests left to do.
+function Nodes.DungeonSection(info)
+	local Q, lines = ns.Q, {}
+	if not (Q.Available() and Q.LootReady() and Q.NamesReady()) then return nil end
+	-- the game says "The Deadmines" where the client's map table says "Deadmines"
+	local function Plain(name) return (ns.Normalize(name):gsub("^the", "")) end
+	local missing = {}
+	for _, id in ipairs(Missing()) do missing[id] = true end
+	for _, instance in ipairs(info and info.instances or {}) do
+		for _, d in ipairs(Q.Dungeons()) do
+			if Plain(d.name) == Plain(instance.name or "") then
+				local areas = Q.DungeonAreas(d.map)
+				for _, boss in ipairs(d.bosses) do
+					local npc = Q.BossNpc(boss, areas)
+					for _, item in ipairs(npc and Q.drops[npc] or {}) do
+						if missing[item] then
+							local chance = Q.DropChance(item, npc)
+							lines[#lines + 1] = ("%s: %s%s"):format(ns.ItemDB.GetName(item) or ("Item " .. item), boss,
+								chance and (" %.3g%%"):format(chance) or "")
+						end
+					end
+				end
+				local open, active = 0, 0
+				for _, area in ipairs(areas) do
+					for _, quest in ipairs(Q.questsByZone[area] or {}) do
+						local state = Q.Quest.name(quest) and Q.QuestForPlayer(quest) and (Q.QuestState(quest) or "open")
+						if state == "open" then open = open + 1 elseif state == "active" then active = active + 1 end
+					end
+				end
+				if open + active > 0 then
+					lines[#lines + 1] = ("%s: %d quests to do, %d in your log"):format(d.name, open + active, active)
+				end
+			end
+		end
+	end
+	for i = #lines, 41, -1 do lines[i] = nil end -- the card takes 40
+	if #lines > 0 then return ns.TITLE, lines end
 end
 
 ---------------------------------------------------------------------------
@@ -395,6 +488,26 @@ function Nodes.Init()
 	if not (map and map.GetCanvas and map.ScrollContainer) then return end
 	layer = CreateFrame("Frame", nil, map:GetCanvas())
 	layer:SetAllPoints()
+	hover = CreateFrame("Button", nil, layer)
+	hover:SetFrameLevel(layer:GetFrameLevel() + 5)
+	hover:Hide()
+	hover:SetScript("OnClick", function(self)
+		if self.item then ns.Browser.Show("item", self.item) end
+	end)
+	Nodes.hover = hover
+	local wait = 0
+	layer:SetScript("OnUpdate", function(_, elapsed)
+		wait = wait + elapsed
+		if wait < 0.1 then return end
+		wait = 0
+		if drawnCount == 0 or not map.ScrollContainer:IsMouseOver() then
+			Nodes.HoverAt(-1e6, -1e6)
+		else
+			local x, y = GetCursorPosition()
+			local scale = layer:GetEffectiveScale()
+			Nodes.HoverAt(x / scale - layer:GetLeft(), layer:GetTop() - y / scale)
+		end
+	end)
 	map:HookScript("OnShow", Nodes.Refresh)
 	for _, change in ipairs({ "OnMapChanged", "OnCanvasScaleChanged", "OnCanvasPanChanged" }) do
 		if type(map[change]) == "function" then hooksecurefunc(map, change, Nodes.Refresh) end
@@ -404,6 +517,7 @@ function Nodes.Init()
 		OM.RegisterCallback(Nodes, "OpenMap_ViewChanged", Nodes.Refresh)
 		OM.RegisterCallback(Nodes, "OpenMap_StitchedChanged", Nodes.Refresh)
 	end
+	if OM and OM.RegisterDungeonSection then OM.RegisterDungeonSection("GoalNotes", Nodes.DungeonSection) end
 	-- the two switches also sit in OpenMap's own menu, where they can be starred onto the map
 	for _, switch in ipairs(OM and OM.RegisterMenuToggle and {
 		{ "goals", "Sources of goal items", "Interface\\Icons\\INV_Misc_Note_01" }, { "show", "Gathering nodes", KIND_ICONS.Mining },

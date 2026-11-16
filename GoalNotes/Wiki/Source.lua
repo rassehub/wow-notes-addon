@@ -287,6 +287,12 @@ function Q.ShowOnMap(area, x, y)
 		ns.Print("Map pin set. Open the map after combat.")
 	else
 		C_Map.OpenWorldMap(uiMap)
+		-- OpenMap's stitched map keeps its view when it opens: glide it to the place
+		local OM = OpenMapAPI
+		if OM and OM.major == 1 and OM.ShowWorld and OM.IsStitched() then
+			local u, v = OM.WorldFromMap(uiMap, x / 100, y / 100)
+			if u then OM.ShowWorld(u, v) end
+		end
 	end
 end
 

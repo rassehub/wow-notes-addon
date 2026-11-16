@@ -171,7 +171,8 @@ end
 function Page:Loot(id, indent, npc)
 	local kind, chance = ItemKind(id), npc and Q.DropChance(id, npc)
 	if chance then kind = (kind and (kind .. "  ") or "") .. ("%.3g%%"):format(chance) end
-	self:Link("item", id, ItemLabel(id), kind, indent)
+	-- drawn faded: gear the player's class cannot equip
+	self:Link("item", id, ItemLabel(id), kind, indent).unusable = ns.ItemDB.Usable(id) == false or nil
 end
 
 -- The quests to do for quest `id`, numbered in order (withSelf: the quest itself last).
@@ -615,7 +616,7 @@ function pages.dungeon(map)
 	end
 
 	local lootReady = Q.Available() and Q.LootReady()
-	page:Head("Bosses and loot", Q.Available() and "open a boss for everything it drops" or nil)
+	page:Head("Bosses and loot", Q.Available() and "open a boss for everything it drops; faded: not for your class" or nil)
 	if Q.Available() and not lootReady then page:Note(LOADING) end
 	for _, boss in ipairs(d.bosses) do
 		local npc = Q.Available() and Q.BossNpc(boss, areas)

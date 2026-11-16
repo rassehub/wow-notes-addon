@@ -1,7 +1,7 @@
 # Plan
 
 State on 2026-11-16: branch `feature/wiki`, everything committed. `tests/run.lua` passes
-(646 checks). Nothing has been run in the game yet: see "Check in the game" below.
+(661 checks). Nothing has been run in the game yet: see "Check in the game" below.
 
 How to run the tests on this machine (no Lua 5.1 installed): see the memory note
 `wow-forever-data-sources.md` (a small C runner against the system `liblua5.4`).
@@ -20,7 +20,24 @@ How to run the tests on this machine (no Lua 5.1 installed): see the memory note
 3. **What a new build changes**: `tools/update_db.py --diff [REF]` lists items, recipes
    and dungeons added / removed / changed; the weekly workflow puts it in its pull request.
 
+4. **Map icon tooltips**: one invisible button follows the cursor onto world map icons
+   (`Nodes.HoverAt`): tooltip with the item or node name, click opens the item's page.
+   The minimap icons have none.
+5. **For my class**: `ItemDB.Usable(id, worn)` from a class table of Classic's weapon and
+   armor rules. Loot lists fade what the class cannot equip; the filter "For my class"
+   and the gear preset use the stricter form (heaviest armor only, cloaks for everyone).
+6. **OpenMap**: `RegisterDungeonSection` (goal items the bosses drop, quests left) and
+   `ShowWorld` when a place is pinned.
+
 ## Check in the game (nothing here could be verified without a client)
+
+- Map icon hover: the tooltip appears and follows from icon to icon, the click opens the
+  page (and is visible when the world map is maximised), and dragging the map still
+  works when the drag starts on an icon.
+- The class table (`CLASS_GEAR` in `ItemDB.lua`) against what Forever's classes can
+  really train; faded loot rows are still readable.
+- OpenMap's dungeon card shows the "Goal Notes" section; dungeon names from OpenMap match
+  ours (matched ignoring case, spaces and a leading "The").
 
 - The five source buttons: icons exist and read well at 18px (`ItemDB.SOURCES[].icon`),
   the row does not collide with the column captions, and the first click on Vendor /
@@ -76,9 +93,6 @@ quest money rewards.
 
 | # | Idea | Value | Effort | Note |
 | --- | --- | --- | --- | --- |
-| 1 | Map icons get a tooltip (item / node name) and a click that opens the page | high | small | pins are bare textures today; needs frames for the world map pins only |
-| 2 | "Can my class use it": grey out unusable dungeon loot, and a real "upgrades for my class" filter | high | medium | Dungeon Journal greys loot out the same way; one class -> armor / weapon table fixes both the preset's weapon gap and the cloak bug |
-| 3 | OpenMap dungeon card: our loot / quest summary via `RegisterDungeonSection`; `ShowWorld` to glide to a pinned place | medium | small | the API is documented and stable (`OpenMapAPI.major == 1`) |
 | 4 | Vendor route: closest vendor for each missing goal item, on the map | high | medium | data is there (`Q.ItemSpawns`); shopping list to Auctionator is a separate, smaller half |
 | 5 | Goal templates: "all quests of this dungeon" | medium | small | the dungeon quest filter already finds them |
 | 6 | "You wear" line and item-level difference on gear pages | medium | small | |
@@ -87,8 +101,8 @@ quest money rewards.
 | 9 | Recipe-scroll links for other locales (`SCROLL` in `update_db.py`) | low | small | only matters once someone uses a non-enUS build |
 | - | Recipe learn skill, trainer locations, boss / NPC abilities, respawn timers, item sets | | | no data source; boss abilities are also "guide" territory |
 
-Recommended next three: **1, 2, 3**. 1 and 3 are small and make the map half of the
-addon feel finished; 2 is the one thing Dungeon Journal does visibly better.
+The first three of the original list (map icon tooltips, "for my class", OpenMap's
+dungeon card) are built. Recommended next: **4, 5, 6**.
 
 ## Open decisions for the user
 

@@ -22,17 +22,11 @@ end
 
 -- The gear part, shared by the Items and Professions tabs. f: an item filter table.
 -- One click to "what could I wear next": gear for the last ten levels up to the player's,
--- in the armor the class wears, best item level first.
--- shortcut: weapons are not narrowed to the class, and cloaks (cloth) only show for cloth wearers.
+-- that the class wields and wears (ItemDB.Usable), best item level first.
 local function UpgradePreset(f)
 	local level = UnitLevel("player") or 1
-	local _, class = UnitClass("player")
-	local armor = ({ WARRIOR = 4, PALADIN = 4, HUNTER = 3, SHAMAN = 3, ROGUE = 2, DRUID = 2 })[class] or 1
-	if armor >= 3 and level < 40 then armor = armor - 1 end -- mail and plate come at 40
 	ns.ItemDB.ResetFilter(f)
-	f.types.weapon = true
-	f.subs[400], f.subs[400 + armor] = true, true -- 400: rings, necks, trinkets
-	if class == "WARRIOR" or class == "PALADIN" or class == "SHAMAN" then f.subs[406] = true end
+	f.types.weapon, f.types.armor, f.forClass = true, true, true
 	f.minLevel, f.maxLevel = math.max(1, level - 9), level
 	ns.db.sort.item, ns.db.sortDesc.item = "ilvl", true
 end
@@ -53,6 +47,7 @@ local function ItemSections(root, f, Changed, withSources)
 	end
 
 	root:CreateTitle("Gear")
+	Toggle(root, "For my class (what it wields and wears)", f, "forClass", Changed)
 	local slots = root:CreateButton("Slots")
 	for _, slot in ipairs(DB.SLOTS) do Toggle(slots, slot[1], f.slots, slot[1], Changed) end
 	local stats = root:CreateButton("Stats (must have all ticked)")

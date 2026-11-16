@@ -409,6 +409,7 @@ function DrawPage()
 		row.right:SetText(line.right or "")
 		row.right:SetTextColor(0.6, 0.6, 0.6)
 		row.plate:SetShown(line.badge and true or false)
+		row:SetAlpha(line.unusable and 0.45 or 1)
 		row.text:SetWidth(math.max(40, width - indent - 6 - (line.right and row.right:GetStringWidth() + 8 or 0)))
 		row.text:SetWordWrap(line.wrap and true or false)
 		local prefix = (line.area or line.uiMap) and ns.Hex.map .. "(map)|r " or ""

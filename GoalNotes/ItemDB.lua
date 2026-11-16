@@ -258,6 +258,44 @@ function ItemDB.TypeName(id)
 	return subLabel[(class or 0) * 100 + (subs[id] or 0)] or typeLabel[classType[class] or ""]
 end
 
+-- What each class can equip: its heaviest armor (1 cloth .. 4 plate), then the keys
+-- (class * 100 + subclass) of its weapons, shields (406) and relics (407-409).
+-- shortcut: Classic's rules; if Forever teaches a class another weapon, add it here.
+local function Gear(armor, ...)
+	local gear = { armor = armor }
+	for _, key in ipairs({ ... }) do gear[key] = true end
+	return gear
+end
+local CLASS_GEAR = {
+	WARRIOR = Gear(4, 406, 200, 201, 202, 203, 204, 205, 206, 207, 208, 210, 213, 215, 216, 218),
+	PALADIN = Gear(4, 406, 407, 200, 201, 204, 205, 206, 207, 208),
+	HUNTER = Gear(3, 200, 201, 202, 203, 206, 207, 208, 210, 213, 215, 216, 218),
+	SHAMAN = Gear(3, 406, 409, 200, 201, 204, 205, 210, 213, 215),
+	ROGUE = Gear(2, 202, 203, 204, 207, 213, 215, 216, 218),
+	DRUID = Gear(2, 408, 204, 205, 210, 213, 215),
+	PRIEST = Gear(1, 204, 210, 215, 219),
+	MAGE = Gear(1, 207, 210, 215, 219),
+	WARLOCK = Gear(1, 207, 210, 215, 219),
+}
+
+-- Whether the player's class can equip an item: true or false for weapons and armor, nil for
+-- everything else. worn: stricter, for "what should I wear": of cloth, leather, mail and
+-- plate only the heaviest the class wears at the player's level (mail and plate come at 40).
+function ItemDB.Usable(id, worn)
+	if not index then Build() end
+	local _, class = UnitClass("player")
+	local gear, itemClass, sub = CLASS_GEAR[class], classes[id], subs[id] or 0
+	if not gear or (itemClass ~= 2 and itemClass ~= 4) then return nil end
+	if itemClass == 2 then return sub == 14 or sub == 20 or gear[200 + sub] or false end -- 14, 20: anyone's
+	-- rings, trinkets and held items have no armor type; cloaks are cloth, for everyone
+	if sub == 0 or slots[id] == 16 then return true end
+	if sub > 4 then return gear[400 + sub] or false end
+	if not worn then return sub <= gear.armor end
+	local best = gear.armor
+	if best >= 3 and (UnitLevel("player") or 60) < 40 then best = best - 1 end
+	return sub == best
+end
+
 -- Makes sure every group exists (saved filters from older versions lack some).
 function ItemDB.PrepareFilter(f)
 	for _, key in ipairs(SETS) do
@@ -272,7 +310,7 @@ function ItemDB.ResetFilter(f)
 	for _, key in ipairs(SETS) do
 		for k in pairs(f[key]) do f[key][k] = nil end
 	end
-	f.minLevel, f.maxLevel = nil, nil
+	f.minLevel, f.maxLevel, f.forClass = nil, nil, nil
 end
 
 function ItemDB.FilterActive(f)
@@ -280,7 +318,7 @@ function ItemDB.FilterActive(f)
 	for _, key in ipairs(SETS) do
 		if next(f[key]) ~= nil then return true end
 	end
-	return f.minLevel ~= nil or f.maxLevel ~= nil
+	return f.minLevel ~= nil or f.maxLevel ~= nil or f.forClass ~= nil
 end
 
 -- The active filter in words: a list of short phrases (empty when nothing is filtered).
@@ -307,6 +345,7 @@ function ItemDB.FilterParts(f)
 	for n, label in ipairs(ns.ItemStats) do
 		if f.stats[n] then parts[#parts + 1] = label end
 	end
+	if f.forClass then parts[#parts + 1] = "for my class" end
 	for _, source in ipairs(ItemDB.SOURCES) do
 		if f.sources[source.key] then parts[#parts + 1] = source.short end
 	end
@@ -332,6 +371,7 @@ function ItemDB.MatchesFilter(id, f)
 		local level = levels[id] or 0
 		if level < (f.minLevel or 0) or level > (f.maxLevel or 1000) then return false end
 	end
+	if f.forClass and ItemDB.Usable(id, true) == false then return false end
 	for n in pairs(f.stats) do
 		local bit = 2 ^ (n - 1)
 		if (stats[id] or 0) % (bit * 2) < bit then return false end

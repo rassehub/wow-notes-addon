@@ -1647,6 +1647,13 @@ for _, g in ipairs(ns.Goals()) do g.untracked = g ~= mapGoal or nil end
 ns.AddItem(mapGoal, 4592, 5) -- sold by Innkeeper Heather, in Westfall
 ns.Nodes.GoalsChanged()
 eq(ns.Nodes.Draw(), 1, "the world map shows where to get what a tracked goal misses")
+-- the icon says what it is under the cursor, and a click opens the item
+local cw, ch = canvas:GetWidth(), canvas:GetHeight()
+eq(ns.Nodes.HoverAt(0.529 * cw + 2, 0.537 * ch - 2), DB.GetName(4592), "hovering a map icon names the item")
+eq(ns.Nodes.hover:IsShown(), true, "with a button under the cursor")
+Fire(ns.Nodes.hover, "OnClick", "LeftButton")
+eq(B.Current().kind .. " " .. B.Current().id, "item 4592", "a click on a map icon opens the item's page")
+eq(tostring(ns.Nodes.HoverAt(0.2 * cw, 0.2 * ch)) .. " " .. tostring(ns.Nodes.hover:IsShown()), "nil false", "and nothing away from the icons")
 -- the minimap has it too, until the player is close enough for the game's own tracking
 Minimap.GetZoom = function() return 0 end -- 467 yards across
 function IsIndoors() return false end
@@ -1702,6 +1709,27 @@ for key, want in pairs({ crafted = 15062, quest = 2244, drop = 5191 }) do
 end
 B.Select("quest")
 eq(C.sources.vendor:IsShown(), false, "other tabs have no source buttons")
+-- OpenMap's dungeon card: what the goals miss in there, and the quests left
+ns.AddItem(mapGoal, 5191, 1) -- Cruel Barb, from Edwin VanCleef
+ns.Nodes.GoalsChanged()
+local cardTitle, card = ns.Nodes.DungeonSection({ instances = { { name = "The Deadmines", bosses = {} } } })
+eq(cardTitle .. " / " .. card[1], "Goal Notes / Cruel Barb: Edwin VanCleef 12.5%", "OpenMap's dungeon card lists the goal items its bosses drop")
+eq(card[#card]:find("^Deadmines: %d+ quests to do, %d+ in your log$") ~= nil, true, "and the quests left to do there")
+eq(ns.Nodes.DungeonSection({ instances = { { name = "Nowhere" } } }), nil, "nothing for a dungeon without either")
+-- what the class can equip (the tests play a warrior)
+eq(tostring(DB.Usable(4547)) .. " " .. tostring(DB.Usable(1190)) .. " " .. tostring(DB.Usable(7922)) .. " " .. tostring(DB.Usable(2770)),
+	"false true true nil", "a warrior has no use for wands, wears cloaks and plate; ore is not gear")
+eq(DB.Usable(7922, true), UnitLevel("player") >= 40, "plate is only what to wear from level 40")
+ns.db.filter.forClass = true
+eq(tostring(DB.MatchesFilter(4547)) .. " " .. tostring(DB.MatchesFilter(1190)) .. " " .. table.concat(DB.FilterParts(ns.db.filter), ","),
+	"false true for my class", "the filter keeps what the class wields and wears")
+DB.ResetFilter()
+eq(ns.db.filter.forClass, nil, "and is cleared with the others")
+eq(FindLine(W.Page("npc", 639), function(l) return l.item == 5191 end).unusable, nil, "loot the class can use is drawn as usual")
+local realClass = UnitClass
+function UnitClass() return "Priest", "PRIEST" end
+eq(FindLine(W.Page("npc", 639), function(l) return l.item == 5191 end).unusable, true, "loot it cannot use is faded (a sword, for a priest)")
+UnitClass = realClass
 mapGoal.untracked = true
 ns.Nodes.GoalsChanged()
 eq(ns.Nodes.Draw(), 0, "untracked goals put nothing on the map")
@@ -1718,6 +1746,9 @@ eq(ns.db.filter.minLevel .. "-" .. ns.db.filter.maxLevel .. " " .. ns.db.sort.it
 	"one click lists gear for the player's level, best first")
 local top = W.List("item", "")
 eq(DB.GetItemLevel(top[1].id) >= DB.GetItemLevel(top[#top].id) and DB.GetLevel(top[1].id) <= 30, true, "and the list follows")
+local unfit = 0
+for _, entry in ipairs(top) do unfit = unfit + (DB.Usable(entry.id, true) and 0 or 1) end
+eq(tostring(ns.db.filter.forClass) .. " " .. unfit, "true 0", "with only what the class wields and wears")
 DB.ResetFilter()
 ns.db.sort.item, ns.db.sortDesc.item = nil, nil
 
@@ -1754,6 +1785,10 @@ eq(wide > mining and wide <= 1500, true, "OpenMap: every zone in view gets its n
 scroll._w = 100 -- zoomed in: a tenth of the canvas wide, around the middle of Westfall
 local narrow = ns.Nodes.Draw()
 eq(narrow > 0 and narrow < mining, true, "OpenMap zoomed in: only what is in view is drawn")
+local glide
+OpenMapAPI.ShowWorld = function(u, v) glide = u .. " " .. v end
+ns.Q.ShowOnMap(40, 50, 25)
+eq(glide, "0.5 0.25", "OpenMap: pinning a place glides the stitched map there")
 OpenMapAPI, ns.db.nodes.show = nil, false
 
 print = _G.print
