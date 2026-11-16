@@ -109,7 +109,7 @@ function Settings.Init()
 	frame = ns.CreateWindow("GoalNotesSettingsFrame", ns.TITLE .. " Settings")
 	Settings.frame = frame
 	frame:SetFrameStrata("HIGH")
-	frame:SetSize(500, 466)
+	frame:SetSize(500, 452)
 	frame:SetPoint("CENTER")
 	frame:RegisterForDrag("LeftButton")
 	frame:SetScript("OnDragStart", frame.StartMoving)
@@ -137,19 +137,27 @@ function Settings.Init()
 		local y = -52 - math.floor((i - 1) / 2) * 22
 		Check(col.label, x, y,
 			function() return ns.db.columns[col.key] end,
-			function(v) ns.db.columns[col.key] = v or nil end)
+			function(v) ns.db.columns[col.key] = v end) -- false, not nil: nil would fall back to the default
 	end
 
-	Section("Behaviour", R, -196)
-	Check("Hide completed entries", R, -214, Setting("hideCompleted"))
-	Check("Count warband bank", R, -236, Setting("includeWarband"))
-	Check("Announce completed items in chat", R, -258, Setting("announce"))
-	Check("Show goals in item tooltips", R, -280, Setting("tooltipInfo"))
-	Check("Lock position and size", R, -302, Setting("locked"))
-	Check("Close with Escape", R, -324, Setting("closeOnEscape"))
-	Check("Track reagents of craftable items", R, -346, Setting("autoCraft"))
-	Check("Show tracker window", R, -368, Setting("tracker"))
-	Check("Show minimap button", R, -390, Setting("minimap"))
+	Section("Goal list", R, -200)
+	Check("Hide completed entries", R, -218, Setting("hideCompleted"))
+	Check("Count warband bank", R, -240, Setting("includeWarband"))
+	Check("Announce completed entries in chat", R, -262, Setting("announce"))
+	Check("Track reagents of craftable items", R, -284, Setting("autoCraft"))
+	Check("Show goals in item tooltips", R, -306, Setting("tooltipInfo"))
+
+	Section("Windows", L, -296)
+	Check("Show tracker window", L, -314, Setting("tracker"))
+	Check("Show minimap button", L, -336, Setting("minimap"))
+	Check("Lock position and size", L, -358, Setting("locked"))
+	Check("Close with Escape", L, -380, Setting("closeOnEscape"))
+
+	local characters = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	characters:SetSize(140, 22)
+	characters:SetPoint("BOTTOMLEFT", 170, 18)
+	characters:SetText("Characters...")
+	characters:SetScript("OnClick", function(self) ns.Alts.Menu(self) end)
 
 	local reset = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
 	reset:SetSize(140, 22)
@@ -159,7 +167,7 @@ function Settings.Init()
 		local d = ns.defaults
 		ns.db.opacity, ns.db.scale, ns.db.fontSize = d.opacity, d.scale, d.fontSize
 		ns.db.slimBorder, ns.db.qualityColors = d.slimBorder, d.qualityColors
-		ns.db.colors, ns.db.columns = CopyTable(d.colors), CopyTable(d.columns)
+		ns.db.colors, ns.db.columns, ns.db.colWidth = CopyTable(d.colors), CopyTable(d.columns), {}
 		Settings.Refresh()
 		Changed()
 	end)

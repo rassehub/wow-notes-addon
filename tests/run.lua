@@ -125,7 +125,17 @@ SOUNDKIT = setmetatable({}, { __index = function() return 1 end })
 YES, NO = "Yes", "No"
 INVTYPE_LEGS, INVTYPE_HEAD = "Legs", "Head"
 ITEM_MOD_STAMINA_SHORT, ITEM_MOD_AGILITY_SHORT, RESISTANCE0_NAME = "Stamina", "Agility", "Armor"
-Enum = { TooltipDataType = { Item = 0 } }
+Enum = { TooltipDataType = { Item = 0 }, BagIndex = { Backpack = 0, Bank = -1, AccountBankTab_1 = 13 } }
+local containers = {} -- bag id -> { { itemID =, stackCount = }, ... }
+C_Container = {
+	GetContainerNumSlots = function(bag) return containers[bag] and #containers[bag] or 0 end,
+	GetContainerItemInfo = function(bag, slot) return containers[bag][slot] end,
+}
+function UnitName() return "Tester" end
+function GetRealmName() return "Realm" end
+function UnitClass() return "Warrior", "WARRIOR" end
+function GetInventoryItemID(_, slot) return slot == 1 and 12640 or nil end
+time = os.time
 
 local now = 0
 local timers = {}
@@ -202,8 +212,14 @@ function MenuNode:CreateButton(text, fn)
 	self[#self + 1] = node
 	return node
 end
-function MenuNode:CreateCheckbox(text, _, set) self[#self + 1] = { text = text, fn = set } end
+function MenuNode:CreateCheckbox(text, _, set) return self:CreateButton(text, set) end -- can have a submenu too
 MenuNode.CreateRadio = MenuNode.CreateCheckbox
+function MenuNode:Find(text) -- the entry, without clicking it
+	for _, n in ipairs(self) do
+		if n.text == text then return n end
+	end
+	error("no menu entry " .. text)
+end
 function MenuNode:Click(text)
 	for _, n in ipairs(self) do
 		if n.text == text then
@@ -220,6 +236,7 @@ function StaticPopup_Show(which, a, b, data) popup = { which = which, data = dat
 function PlaySound() end
 function InCombatLockdown() return false end
 function UnitFactionGroup() return "Alliance" end
+function UnitLevel() return 30 end
 function debugprofilestop() return 0 end
 function geterrorhandler() return error end
 local pinned, openedMap
@@ -228,7 +245,30 @@ C_Map = {
 	CanSetUserWaypointOnMap = function() return true end,
 	SetUserWaypoint = function(point) pinned = point end,
 	OpenWorldMap = function(map) openedMap = map end,
+	GetBestMapForUnit = function() return 1436 end, -- Westfall
+	-- the player stands at 50, 50 of a map 4000 by 3000 yards
+	GetPlayerMapPosition = function() return { GetXY = function() return 0.5, 0.5 end } end,
+	GetMapWorldSize = function() return 4000, 3000 end,
+	GetMapInfo = function(map) return { mapID = map } end,
+	GetMapArtLayers = function() return { { layerIndex = 1, layerWidth = 1002, layerHeight = 668, tileWidth = 256, tileHeight = 256 } } end,
+	GetMapArtLayerTextures = function() return { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 } end,
 }
+function SetCursor() end
+function ResetCursor() end
+local money, cooking = 0, 150
+function GetMoney() return money end
+function GetProfessions() return nil, nil, nil, nil, 5 end
+function GetProfessionInfo(index) if index == 5 then return "Cooking", 134, cooking, 300 end end
+C_TooltipInfo = { GetItemByID = function(id)
+	if id ~= 15062 then return nil end
+	return { lines = {
+		{ leftText = "Devilsaur Leggings" },
+		{ leftText = "Legs", rightText = "Leather" },
+		{ leftText = "148 Armor" },
+		{ leftText = "+12 Stamina", leftColor = { r = 1, g = 1, b = 1 } },
+		{ leftText = "Equip: Improves your chance to hit by 1%.", leftColor = { r = 0, g = 1, b = 0 } },
+	} }
+end }
 UiMapPoint = { CreateFromCoordinates = function(map, x, y) return { map = map, x = x, y = y } end }
 C_SuperTrack = { SetSuperTrackedUserWaypoint = function() end }
 local questsDone = {}
@@ -521,7 +561,7 @@ ns.UI.Layout()
 
 -- Filters and browsing ------------------------------------------------------------
 local F = ns.db.filter
-F.type, F.source = "armor", "crafted"
+F.types.armor, F.sources.crafted = true, true
 local browse = ns.ItemDB.Search("", 200, ns.ItemDB.MatchesFilter, true)
 eq(#browse, 200, "browsing a filter without text")
 for _, r in ipairs(browse) do
@@ -529,12 +569,12 @@ for _, r in ipairs(browse) do
 end
 local dev = ns.ItemDB.Search("devilsaur", 200, ns.ItemDB.MatchesFilter)
 eq(#dev, 2, "crafted devilsaur armor: leggings and gauntlets")
-F.source = "found"
+F.sources = { found = true }
 eq(#ns.ItemDB.Search("devilsaur leggings", 200, ns.ItemDB.MatchesFilter), 0, "crafted armor excluded from looted")
-F.type, F.source = "reagent", "any"
+F.types, F.sources = { reagent = true }, {}
 eq(ns.ItemDB.MatchesFilter(8170), true, "leather is a reagent")
 eq(ns.ItemDB.MatchesFilter(15062), false, "leggings are not a reagent")
-F.type = "consumable"
+F.types = { consumable = true }
 eq(ns.ItemDB.MatchesFilter(4592), true, "food is a consumable")
 eq(ns.ItemDB.FilterLabel(), "Consumables", "filter label")
 
@@ -550,7 +590,7 @@ eq(ac.offset, 5, "and keep the highlight visible")
 Fire(ac.buttons[1], "OnEnter")
 Fire(ac.buttons[1], "OnClick")
 eq(ns.SelectedGoal().entries[#ns.SelectedGoal().entries].id, ac.results[6] and ac.results[6].id or ns.SelectedGoal().entries[#ns.SelectedGoal().entries].id, "clicking a scrolled suggestion")
-F.type = "all"
+ns.ItemDB.ResetFilter()
 eq(ns.ItemDB.FilterActive(), false, "filter cleared")
 input:ClearFocus()
 input:SetFocus()
@@ -571,9 +611,10 @@ end
 eq(trackerLines > 5, true, "tracker lists goals and missing items")
 local mm = ns.MinimapButton.button
 Fire(mm, "OnClick", "RightButton")
-eq(tracker:IsShown(), false, "minimap right-click hides the tracker")
+menu:Click("Show or hide the tracker")
+eq(tracker:IsShown(), false, "the minimap button's right-click menu hides the tracker")
 eq(ns.db.tracker, false, "tracker state saved")
-Fire(mm, "OnClick", "RightButton")
+menu:Click("Show or hide the tracker")
 eq(tracker:IsShown(), true, "and shows it again")
 local was = frame:IsShown()
 Fire(mm, "OnClick", "LeftButton")
@@ -604,7 +645,8 @@ for _, t in ipairs(W.TABS) do B.Select(t.key) end
 eq(B.Tab(), "npc", "every tab opens without QuestieDB")
 local p = W.Page("item", 15062)
 eq(Has(p, "Crafted with Leatherworking"), true, "item page shows the recipe")
-eq(Has(p, "yellow at 310"), true, "item page shows skill levels")
+local skill = FindLine(p, function(l) return l.badge end)
+eq(skill.right:find("|cffffff00310|r |cff808080", 1, true), 1, "item page shows the skill levels as coloured numbers on a plate")
 eq(Has(p, "30 x "), true, "item page lists reagents")
 eq(Has(p, "Install the QuestieDB addon"), true, "item page explains the missing data")
 p = W.Page("item", 8170)
@@ -618,12 +660,14 @@ eq(#W.List("dungeon", "dead mines"), 1, "dungeon list filters by name")
 p = W.Page("dungeon", 36)
 eq(p.title, "Deadmines", "dungeon page")
 eq(Has(p, "Edwin VanCleef"), true, "dungeon page lists bosses without QuestieDB")
-eq(Has(p, "Dungeon, 5 players"), true, "dungeon size")
+eq(Has(p, "Dungeon, 5 players, level |cff99999916-23|r"), true, "dungeon size, and its level: grey, outgrown at 30")
+eq(ns.Q.Dungeon(533), nil, "instances the client has no level for (not in the game) are left out")
+eq(list[1].cells.level ~= nil and W.SortKey("dungeon"), "name", "dungeons have a level column")
 list = W.List("profession", "")
 eq(#list >= 8, true, "profession list")
 p = W.Page("profession", "Leatherworking")
 eq(#p.lines > 100, true, "profession page lists its recipes")
-eq(p.lines[3].right:find(" / ", 1, true) ~= nil, true, "recipes show yellow / grey skill")
+eq(p.lines[3].badge and p.lines[3].right:find("|cffffff00", 1, true), 1, "recipes show their yellow and grey skill")
 eq(W.List("profession", "devilsaur leggings")[1].id, 15062, "searching recipes by name")
 eq(W.List("item", "longjaw mud")[1].id, 4592, "item tab search")
 local _, message = W.List("quest", "anything")
@@ -658,7 +702,8 @@ local function Entity(data, tables)
 end
 local T = { name = true, subName = true, friendlyToFaction = true }
 for _, f in ipairs({ "spawns", "questStarts", "questEnds", "npcDrops", "objectDrops", "itemDrops", "vendors",
-	"questRewards", "relatedQuests", "objectivesText", "preQuestGroup", "preQuestSingle", "childQuests" }) do T[f] = true end
+	"questRewards", "relatedQuests", "objectivesText", "preQuestGroup", "preQuestSingle", "childQuests",
+	"requiredMinRep", "requiredSkill", "reputationReward" }) do T[f] = true end
 T.startedBy, T.finishedBy, T.objectives = "always", "always", "always"
 local quests = {
 	[1] = { name = "The Defias Brotherhood", questLevel = 22, requiredLevel = 14, zoneOrSort = 1581,
@@ -668,19 +713,23 @@ local quests = {
 	[3] = { name = "Horde Only Deadmines", questLevel = 20, zoneOrSort = 1581, requiredRaces = 178, startedBy = {}, finishedBy = {} },
 	[4] = { name = "Aftermath", questLevel = 23, zoneOrSort = 40, startedBy = { { 100 } }, finishedBy = { { 100 } } },
 	[5] = { name = "Earlier Still", questLevel = 9, zoneOrSort = 40, startedBy = { { 100 } }, finishedBy = { { 100 } } },
-	[6] = { name = "And Another", questLevel = 9, zoneOrSort = 40, startedBy = { { 100 } }, finishedBy = { { 100 } } },
+	[6] = { name = "And Another", questLevel = 9, zoneOrSort = 40, startedBy = { { 100 } }, finishedBy = { { 100 } },
+		reputationReward = { { 72, 250 } } },
 }
 local npcs = {
 	[639] = { name = "Edwin VanCleef", minLevel = 21, maxLevel = 21, rank = 1, zoneID = 1581, spawns = { [1581] = { { -1, -1 } } } },
 	[100] = { name = "Gryan Stoutmantle", subName = "The People's Militia", minLevel = 35, maxLevel = 35, zoneID = 40, friendlyToFaction = "A",
 		spawns = { [40] = { { 56.3, 47.5 }, { 50, 50 } } }, questStarts = { 1, 4, 3 }, questEnds = { 1 } },
-	[200] = { name = "Innkeeper Heather", zoneID = 40, spawns = { [40] = { { 52.9, 53.7 } } } },
+	[200] = { name = "Innkeeper Heather", zoneID = 40, spawns = { [40] = { { 52.9, 53.7 } } }, npcFlags = 4 + 128 },
+	[300] = { name = "Old Greyjaw", minLevel = 12, maxLevel = 12, rank = 4, zoneID = 12, spawns = { [12] = { { 30, 60 } } } },
 }
 local qitems = {
 	[5191] = { name = "Cruel Barb", npcDrops = { 639 }, questRewards = {} },
 	[4592] = { name = "Longjaw Mud Snapper", vendors = { 200 } },
 	[8170] = { name = "Rugged Leather", npcDrops = { 639, 100 }, objectDrops = { 900 } },
 	[15062] = { name = "Devilsaur Leggings", questRewards = { 1 }, startQuest = 4 },
+	[2244] = { name = "Krol Blade", questRewards = { 1 } },
+	[15772] = { name = "Pattern: Devilsaur Leggings", vendors = { 200 } },
 }
 local objects = { [900] = { name = "Wanted Poster", zoneID = 40, spawns = { [40] = { { 54, 31 } } }, questStarts = { 2 } } }
 LibQuestieDB = {
@@ -688,6 +737,8 @@ LibQuestieDB = {
 	RequireContract = function() return true end,
 	Enum = { factionRaceMasks = { Alliance = 77, Horde = 178 } },
 	Support = { Get = function(name)
+		if name == "QuestieClassicItemDrops" then return { wowheadData = "return { [5191] = { [639] = 12.5 } }" } end
+		if name == "QuestXP" then return { db = { [1] = { 22, 1150 } } } end -- { quest level, xp }
 		if name ~= "ZoneDB" then return nil end
 		return {
 			instanceIdToAreaId = { [34] = 717 }, -- Deadmines deliberately absent: found by name instead
@@ -715,16 +766,21 @@ p = W.Page("quest", 1)
 eq(p.title, "[22] The Defias Brotherhood", "quest title with level")
 eq(Has(p, "Level 22, requires level 14, The Deadmines"), true, "quest facts")
 eq(Has(p, "Gryan Stoutmantle"), true, "quest giver")
-eq(Has(p, "Westfall  56.3, 47.5"), true, "quest giver location")
+eq(Has(p, "Westfall  50.0, 50.0  (2 places)"), true, "quest giver location: of two spawns the one closest to the player")
 eq(Has(p, "Kill Edwin VanCleef. Bring his head."), true, "objective text")
-eq(Has(p, "Required first"), true, "prerequisites section")
+eq(table.concat(ns.Q.Chain(1), " "), "5 6 2 1", "quest chain: what to do first comes first")
+eq(Has(p, "Quest chain 4 quests, in this order"), true, "chain section")
 local order = {}
 for i, l in ipairs(p.lines) do if l.kind == "quest" then order[#order + 1] = l.id .. "@" .. l.indent end end
-eq(table.concat(order, " "), "2@1 5@2 6@2 4@1", "prerequisite chain is nested, then what it leads to")
-eq(Has(p, "all of:"), true, "group prerequisites are labelled")
-eq(Has(W.Page("quest", 4), "Required first"), false, "no prerequisite section when there are none")
+eq(table.concat(order, " "), "5@1 6@1 2@1 1@1 5@1 4@1", "the chain in order, the next step, then what it leads to")
+eq(FindLine(p, function(l) return l.id == 5 end).right, "|cffffd100do this next|r", "the first open quest is marked")
+eq(FindLine(p, function(l) return l.id == 6 end).right, nil, "later steps are not")
+eq(Has(p, "Next step pick it up at"), true, "the next step says where to go")
+eq(Has(W.Page("quest", 4), "Quest chain"), false, "no chain section for a quest that stands alone")
+eq(Has(W.Page("quest", 5), "First Step"), true, "a quest lists the quests that wait for it")
 questsDone[2] = true
-eq(Has(W.Page("quest", 1), "First Step |cff40ff40(done)|r"), true, "completed prerequisites are marked")
+eq(Has(W.Page("quest", 1), "First Step |cff40ff40(done)|r"), true, "completed steps are marked")
+eq(table.concat(ns.Q.Chain(1), " "), "2 1", "what led to a finished quest is dropped from the chain")
 eq(Has(W.Page("quest", 2), "Wanted Poster"), true, "quests started by objects")
 eq(Has(W.Page("quest", 3), "Not available to your faction"), true, "faction warning")
 
@@ -736,7 +792,7 @@ eq(FindLine(p, function(l) return l.item == 15062 end) ~= nil, true, "quest rewa
 
 p = W.Page("item", 5191)
 eq(Has(p, "Dropped by"), true, "item drop sources")
-eq(FindLine(p, function(l) return l.kind == "npc" and l.id == 639 end).right, "The Deadmines", "drop source shows its zone")
+eq(FindLine(p, function(l) return l.kind == "npc" and l.id == 639 end).right, "The Deadmines  12.5%", "drop source shows its zone and drop chance")
 p = W.Page("item", 4592)
 eq(Has(p, "Sold by") and Has(p, "Innkeeper Heather"), true, "vendors")
 p = W.Page("item", 8170)
@@ -748,7 +804,7 @@ eq(Has(W.Page("item", 15417), "No source recorded"), true, "items without any so
 p = W.Page("npc", 639)
 eq(Has(p, "Level 21 elite"), true, "npc level and rank")
 eq(Has(p, "Inside The Deadmines"), true, "instance spawns have no coordinates")
-eq(FindLine(p, function(l) return l.item == 5191 end) ~= nil, true, "npc drops")
+eq(FindLine(p, function(l) return l.item == 5191 end).right, "12.5%", "npc drops with their drop chance")
 eq(p.lines[#p.lines].item, 8170, "common drops sort below better loot")
 p = W.Page("npc", 100)
 eq(Has(p, "<The People's Militia>") and Has(p, "Friendly to Alliance"), true, "npc details")
@@ -763,7 +819,7 @@ eq(entrance.text, "Westfall  42.6, 71.8", "dungeon entrance")
 eq(FindLine(p, function(l) return l.kind == "npc" and l.id == 639 end).right, "21 elite", "bosses link to their NPC")
 order = {}
 for _, l in ipairs(p.lines) do if l.kind == "quest" then order[#order + 1] = l.id .. "@" .. l.indent end end
-eq(table.concat(order, " "), "1@1 2@2 5@3 6@3", "dungeon quests with what is needed first")
+eq(table.concat(order, " "), "1@1 2@2", "dungeon quests with the steps before them")
 
 -- driving the browser itself
 B.Select("dungeon")
@@ -802,6 +858,113 @@ end
 B.Select("goals")
 ns.UI.Layout()
 
+-- Goal kinds beyond items: money, profession skill, quests --------------------------------
+eq(ns.ParseSpecial("100g").gold, 1000000, "gold goal")
+eq(ns.ParseSpecial(" 250 Gold ").gold, 2500000, "gold goal, long form")
+eq(ns.ParseSpecial("cooking 225").skill, "Cooking", "skill goal")
+eq(ns.ParseSpecial("Cooking 225").need, 225, "skill goal level")
+eq(ns.ParseSpecial("hello 5"), nil, "ordinary text is not a special goal")
+eq(ns.ParseSpecial("15 pound salmon"), nil, "item names are not special goals")
+
+B.Select("goals")
+local kinds = ns.AddGoal("Kinds")
+ns.UI.FocusInput()
+input:SetText("100g")
+eq(#ac.results, 0, "no item suggestions for a gold goal")
+Fire(input, "OnEnterPressed")
+input:SetText("Cooking 225")
+Fire(input, "OnEnterPressed")
+eq(kinds.entries[1].gold, 1000000, "gold entry added from the input box")
+eq(kinds.entries[2].skill, "Cooking", "skill entry added from the input box")
+eq(ns.EntryInfo(kinds.entries[1]).text, "0g / 100g", "gold progress text")
+eq(ns.EntryInfo(kinds.entries[2]).text, "150 / 225", "skill progress text")
+eq(ns.EntryDone(kinds.entries[1]), false, "gold goal open")
+RunTimers()
+printed = {}
+money, cooking = 1500000, 225
+Fire(eventFrame, "OnEvent", "PLAYER_MONEY")
+RunTimers()
+eq(ns.EntryDone(kinds.entries[1]) and ns.EntryDone(kinds.entries[2]), true, "gold and skill goals complete")
+eq(#printed, 2, "both announced")
+eq(ns.EntryInfo({ skill = "Alchemy", need = 50 }).text, "? / 50", "unknown profession shows a question mark")
+
+B.Show("quest", 4)
+local function ButtonWithText(text)
+	for _, f in ipairs(allFrames) do
+		if f._kind == "Button" and f:IsShown() and f._text == text then return f end
+	end
+end
+Fire(ButtonWithText("Add to goal"), "OnClick")
+menu:Click("Kinds  |cff999999(selected)|r")
+eq(kinds.entries[3].quest, 4, "quest added to the goal picked from the menu")
+Fire(ButtonWithText("Add to goal"), "OnClick")
+menu:Click("Kinds  |cff999999(selected)|r")
+eq(#kinds.entries, 3, "the same quest is not added twice")
+eq(ns.EntryInfo(kinds.entries[3]).label, "Aftermath", "quest entry shows the quest name")
+eq(ns.EntryInfo(kinds.entries[3]).text, "not started", "quest entry state")
+questsDone[4] = true
+eq(ns.EntryDone(kinds.entries[3]), true, "quest entry completes when the quest is turned in")
+kinds.entries[1].note = "for the mount"
+B.Select("goals")
+ns.UI.Layout()
+EachRow(function(row)
+	Fire(row, "OnEnter")
+	Fire(row, "OnClick", "RightButton")
+end)
+
+-- Source column, inline stats, loot at a glance --------------------------------------------
+eq(W.Source(15062), "Leatherworking", "source: crafted")
+eq(W.Source(5191), "Drop: Edwin VanCleef 12.5%", "source: single drop with its chance")
+eq(W.Source(2244), "Quest: The Defias Brotherhood", "source: quest reward")
+eq(W.Source(15417), nil, "source: unknown")
+p = W.Page("item", 15062)
+eq(Has(p, "+12 Stamina") and Has(p, "Equip: Improves your chance to hit"), true, "item page shows the tooltip stats inline")
+eq(Has(p, "Devilsaur Leggings\nDevilsaur Leggings"), false, "tooltip name line is not repeated")
+eq(p.equippable, true, "gear pages offer Compare")
+eq(W.Page("item", 8170).equippable, false, "materials do not")
+p = W.Page("dungeon", 36)
+local inline = FindLine(p, function(l) return l.item == 5191 end)
+eq(inline and inline.indent, 2, "dungeon page lists rare loot under its boss")
+eq(FindLine(p, function(l) return l.item == 8170 end), nil, "common drops stay off the dungeon overview")
+list = W.List("quest", "")
+eq(list[1].caption and list[1].text, "Not done yet: Westfall (2)", "quest tab starts with the current zone")
+local zoneIds = {}
+for i = 2, #list do zoneIds[#zoneIds + 1] = list[i].id end
+eq(table.concat(zoneIds, " "), "5 6", "zone quests: open ones only, by level")
+
+-- Navigation: tabs keep their state, Back says where it goes ------------------------------
+B.Show("dungeon", 36)
+B.Open("npc", 639)
+eq(ButtonWithText("< Deadmines") ~= nil, true, "Back names the previous page")
+B.Select("profession")
+B.Select("dungeon")
+eq(B.Current().kind == "npc" and B.Current().id == 639, true, "returning to a tab restores its page")
+Fire(ButtonWithText("< Deadmines"), "OnClick")
+eq(B.Current().kind, "dungeon", "Back still works after switching tabs")
+B.Show("item", 15062)
+Fire(ButtonWithText("Compare"), "OnClick")
+eq(ns.Compare.frame:IsShown(), true, "Compare opens from an item page")
+eq(ns.Compare.frame.replace:IsShown(), false, "no 'replace' when not comparing a goal entry")
+ns.Compare.frame:Hide()
+
+-- Tracker: folding ---------------------------------------------------------------------------
+local function TrackerLines()
+	local n = 0
+	for _, f in ipairs(allFrames) do
+		if f._parent == tracker and f._kind == "Button" and f:IsShown() then n = n + 1 end
+	end
+	return n
+end
+ns.db.tracker = true
+ns.Tracker.Apply()
+local open = TrackerLines()
+for _, g in ipairs(ns.Goals()) do g.trackerCollapsed = true end
+ns.Tracker.Update()
+eq(TrackerLines(), #ns.Goals(), "folded goals show only their title")
+eq(TrackerLines() < open, true, "folding shortens the tracker")
+for _, g in ipairs(ns.Goals()) do g.trackerCollapsed = nil end
+B.Select("goals")
+
 -- Settings and slash commands ------------------------------------------------------
 SlashCmdList.GOALNOTES("config")
 eq(ns.Settings.frame:IsShown(), true, "settings open")
@@ -819,6 +982,748 @@ SlashCmdList.GOALNOTES("")
 eq(frame:IsShown(), false, "slash toggles")
 GoalNotes_OnAddonCompartmentClick(nil, "LeftButton")
 eq(frame:IsShown(), true, "compartment button toggles")
+
+-- Item filters: every group is a set of toggles ------------------------------------------------
+local DB, C = ns.ItemDB, B.Controls()
+local function Summary() return C.summary.text._text end
+local function Ids(entries)
+	local out = {}
+	for _, e in ipairs(entries) do if not e.caption then out[#out + 1] = e.id end end
+	return table.concat(out, " ")
+end
+B.Select("item")
+DB.ResetFilter()
+F = ns.db.filter
+F.subs[207] = true
+eq(DB.MatchesFilter(2244), true, "Krol Blade is a one-handed sword")
+F.subs = { [208] = true }
+eq(DB.MatchesFilter(2244), false, "and not a two-handed one")
+F.subs[207] = true
+eq(DB.MatchesFilter(2244), true, "several weapon types can be ticked at once")
+F.types.armor = true
+eq(DB.MatchesFilter(15062) and DB.MatchesFilter(2244), true, "types and weapon types add up")
+F.types = {}
+F.slots["One-Hand"], F.quality[4], F.minLevel, F.maxLevel, F.stats = true, true, 50, 52, { [1] = true, [3] = true }
+eq(DB.MatchesFilter(2244), true, "type, slot, quality, level range and stats together")
+eq(DB.FilterLabel(), "One-Handed Swords, Two-Handed Swords, One-Hand, Epic, level 50-52, Strength, Stamina", "label names every part")
+local swords = DB.Search("", 200, DB.MatchesFilter, true)
+eq(#swords > 0, true, "the combined filter can be browsed")
+for _, r in ipairs(swords) do
+	eq(DB.GetLevel(r.id) >= 50 and DB.GetLevel(r.id) <= 52 and DB.GetClass(r.id) == 2 and DB.GetQuality(r.id) == 4, true, "browse honours every group")
+end
+F.quality = { [2] = true }
+eq(DB.MatchesFilter(2244), false, "quality")
+F.quality = {}
+F.stats[4] = true
+eq(DB.MatchesFilter(2244), false, "every ticked stat is required")
+F.stats[4], F.maxLevel = nil, 40
+eq(DB.MatchesFilter(2244), false, "level cap")
+DB.ResetFilter()
+F.sources.quest = true
+eq(DB.MatchesFilter(2244), true, "source: quest reward")
+eq(DB.MatchesFilter(5191), false, "source: an empty reward list is not a quest reward")
+F.sources.drop = true
+eq(DB.MatchesFilter(5191), true, "sources add up")
+DB.ResetFilter()
+eq(DB.FilterActive(), false, "reset clears every group")
+
+B.Layout()
+eq(Summary(), "No filter", "summary line without a filter")
+eq(C.filter:IsShown() and C.sort:IsShown() and not C.clear:IsShown(), true, "filter and sort buttons; nothing to clear yet")
+Fire(C.filter, "OnEnter")
+Fire(C.filter, "OnClick", "LeftButton")
+menu:Click("Weapon types"):Click("Daggers")
+menu:Click("Weapon types"):Click("One-Handed Swords")
+eq(F.subs[215] and F.subs[207], true, "menu: two weapon types ticked")
+menu:Click("Slots"):Click("One-Hand")
+menu:Click("Stats (must have all ticked)"):Click("Agility")
+menu:Click("Required level"):Click("Around my level (25-30)")
+eq(F.slots["One-Hand"] and F.stats[2] and F.minLevel == 25 and F.maxLevel == 30, true, "menu: slot, stats, level")
+list = W.List("item", "")
+eq(#list > 0, true, "item tab lists the filtered items")
+eq(tonumber(list[1].cells.level) ~= nil, true, "item list shows the required level")
+eq(Summary(), "One-Handed Swords, Daggers, One-Hand, level 25-30, Agility", "the summary says what is filtered")
+eq(C.clear:IsShown(), true, "an active filter can be cleared")
+
+-- sorting
+Fire(C.sort, "OnEnter")
+Fire(C.sort, "OnClick", "LeftButton")
+menu:Click("Lvl")
+menu:Click("Reversed")
+list = W.List("item", "")
+local ordered = true
+for i = 2, #list do ordered = ordered and DB.GetLevel(list[i - 1].id) >= DB.GetLevel(list[i].id) end
+eq(ordered and DB.GetLevel(list[1].id), 30, "sorted by level, highest first")
+eq(Summary():find("sorted by lvl, reversed", 1, true) ~= nil, true, "the summary says how it is sorted")
+menu:Click("Name")
+menu:Click("Reversed")
+list = W.List("item", "")
+eq(list[1].text < list[#list].text, true, "sorted by name")
+Fire(C.sort, "OnClick", "RightButton")
+eq(ns.db.sort.item == nil and ns.db.sortDesc.item == nil, true, "right-click returns to the default order")
+
+Fire(C.filter, "OnClick", "LeftButton")
+menu:Click("Source"):Click("Dropped by a creature")
+eq(F.sources.drop, true, "menu: QuestieDB sources")
+Fire(C.clear, "OnClick")
+eq(DB.FilterActive(), false, "the clear button resets the filter")
+C.minLevel._text = "40"
+Fire(C.minLevel, "OnEnter")
+Fire(C.minLevel, "OnTextChanged", true)
+eq(F.minLevel, 40, "typing a level sets the range")
+eq(Summary(), "level 40-max", "and updates the summary")
+Fire(C.filter, "OnClick", "RightButton")
+eq(F.minLevel, nil, "right-clicking the filter button clears it")
+B.Select("goals")
+ns.UI.Layout()
+B.Select("item")
+
+-- Profession filters ---------------------------------------------------------------------------
+local RF = ns.db.recipeFilter
+B.Select("profession")
+eq(W.List("profession", "")[1].kind, "profession", "no filter: the professions themselves")
+eq(C.minLevel:IsShown(), true, "recipes have the level boxes too")
+Fire(C.filter, "OnClick", "LeftButton")
+menu:Click("Professions"):Click("Leatherworking")
+list = W.List("profession", "")
+ordered = #list > 1
+for i, e in ipairs(list) do
+	ordered = ordered and e.kind == "item" and R.Get(e.id).profession == "Leatherworking"
+		and (i == 1 or R.Get(list[i - 1].id).yellow <= R.Get(e.id).yellow)
+end
+eq(ordered, true, "one profession's recipes, easiest first")
+menu:Click("Slots"):Click("Legs")
+eq((" " .. Ids(W.List("profession", "")) .. " "):find(" 15062 ", 1, true) ~= nil, true, "recipes narrowed to a slot")
+eq(Summary(), "Leatherworking, Legs", "recipe filter summary")
+menu:Click("I have every reagent")
+eq(#W.List("profession", ""), 0, "nothing can be made from empty bags")
+for _, reagent in ipairs(R.Get(15062).reagents) do bags[reagent[1]] = reagent[2] end
+eq((" " .. Ids(W.List("profession", "")) .. " "):find(" 15062 ", 1, true) ~= nil, true, "what the reagents in hand can make")
+bags = {}
+menu:Click("I have every reagent")
+menu:Click("Slots"):Click("Legs")
+menu:Click("Search by reagent name")
+list = W.List("profession", "rugged leather")
+ordered = #list > 0
+for _, e in ipairs(list) do
+	local uses = false
+	for _, reagent in ipairs(R.Get(e.id).reagents) do uses = uses or ns.Normalize(DB.GetName(reagent[1])):find("ruggedleather", 1, true) ~= nil end
+	ordered = ordered and uses
+end
+eq(ordered, true, "recipes found by what they are made from")
+menu:Click("Search by reagent name")
+menu:Click("Still gives skill at my level")
+eq(#W.List("profession", ""), 0, "no skill-ups in a profession you do not have")
+RF.professions = { Cooking = true }
+list = W.List("profession", "")
+ordered = #list > 0
+for _, e in ipairs(list) do ordered = ordered and R.Get(e.id).grey > 150 end
+eq(ordered, true, "recipes that still give skill at 150")
+Fire(C.clear, "OnClick")
+eq(W.List("profession", "")[1].kind, "profession", "cleared: back to the professions")
+
+-- How a recipe is learned
+eq(R.Scrolls(15062)[1], 15772, "a crafted item knows its recipe item")
+p = W.Page("item", 15062)
+eq(Has(p, "How to learn it") and FindLine(p, function(l) return l.item == 15772 end).right, "Vendor: Innkeeper Heather",
+	"the item page links the pattern and says where it comes from")
+eq(W.LearnedFrom(15062), "Pattern - Vendor: Innkeeper Heather", "short form for lists")
+local trained
+for id in pairs(R.All()) do
+	if not R.Scrolls(id) and R.Get(id).profession == "Leatherworking" then trained = id break end
+end
+eq(Has(W.Page("item", trained), "Leatherworking trainer"), true, "recipes without a recipe item come from a trainer")
+eq(FindLine(W.Page("profession", "Leatherworking"), function(l) return l.item == 15062 end).text:find("Pattern - Vendor", 1, true) ~= nil, true,
+	"the profession page says how each recipe is learned")
+Fire(C.filter, "OnClick", "LeftButton")
+menu:Click("Learned from"):Click("A trainer")
+list = W.List("profession", "")
+ordered = #list > 0
+for _, e in ipairs(list) do ordered = ordered and R.Scrolls(e.id) == nil end
+eq(ordered and Summary(), "from a trainer", "recipes can be filtered by how they are learned")
+Fire(C.clear, "OnClick")
+eq(next(RF.learn), nil, "and the filter cleared")
+
+-- Quest filters: places, reputation, side, level -------------------------------------------------
+local QF = ns.db.questFilter
+B.Select("quest")
+eq(Summary(), "Quests where you are", "quest summary without a filter")
+Fire(C.filter, "OnClick", "LeftButton")
+menu:Click("Zones"):Click("Westfall")
+eq(QF.zones[40], true, "menu: zone")
+eq(W.List("quest", "")[1].text, "Not done yet: Westfall (2)", "browsing a chosen zone")
+eq(#W.List("quest", "defias"), 0, "searching stays inside the chosen zone")
+menu:Click("Quests I have already done")
+list = W.List("quest", "")
+eq(list[1].text, "Quests: Westfall (4)", "done quests can be listed too")
+eq(list[#list].cells.status, "|cff40ff40done|r", "and are marked")
+menu:Click("Dungeons and raids"):Click("Deadmines")
+eq(W.List("quest", "")[1].text, "Quests: Deadmines, Westfall (5)", "several places add up")
+menu:Click("Zones"):Click("Westfall")
+eq(Ids(W.List("quest", "")), "1", "dungeon quests of your side")
+eq(Summary(), "Deadmines", "quest filter summary")
+menu:Click("Horde")
+eq(Ids(W.List("quest", "")), "3 1", "the other side's quests on request, with those open to everyone")
+menu:Click("Both factions")
+eq(Ids(W.List("quest", "")), "3 1", "or both, by level")
+menu:Click("My faction")
+menu:Click("Dungeons and raids"):Click("Deadmines")
+menu:Click("Dungeons and raids"):Click("Every dungeon and raid")
+eq(W.List("quest", "")[1].text, "Quests: all dungeons and raids (1)", "every dungeon quest at once")
+menu:Click("Clear all filters")
+eq(Summary(), "Quests where you are", "quest filter cleared")
+menu:Click("Gives reputation with"):Click("Faction 72")
+list = W.List("quest", "")
+eq(list[1].text == "Quests: Faction 72 reputation (1)" and list[2].id, 6, "quests by the reputation they give")
+menu:Click("Zones"):Click("Westfall")
+eq(Summary(), "Westfall, Faction 72 reputation", "place and reputation combine")
+eq(Ids(W.List("quest", "")), "6", "and narrow each other")
+menu:Click("Gives reputation with"):Click("Faction 72")
+eq(Ids(W.List("quest", "")), "5 6 2 4", "zone quests by level")
+Fire(C.sort, "OnClick", "LeftButton")
+menu:Click("Name")
+eq(Ids(W.List("quest", "")), "4 6 5 2", "quests sorted by name")
+menu:Click("Reversed")
+eq(Ids(W.List("quest", "")), "2 5 6 4", "and reversed")
+Fire(C.sort, "OnClick", "RightButton")
+quests[5].requiredLevel = 40
+Fire(C.filter, "OnClick", "LeftButton")
+menu:Click("Only quests I can take at my level")
+eq(Ids(W.List("quest", "")), "6 2 4", "quests above your level can be hidden")
+quests[5].requiredLevel = nil
+Fire(C.clear, "OnClick")
+QF.hideDone = true
+eq(W.List("quest", "")[1].text, "Not done yet: Westfall (2)", "back to the quests where you are")
+
+-- List columns, counts and quest kinds -------------------------------------------------------------
+B.Select("item")
+eq(W.List("item", "krol blade")[1].cells.slot, nil, "columns that are off are not filled")
+Fire(C.header.name, "OnEnter")
+Fire(C.header.name, "OnClick", "RightButton")
+menu:Click("Slot")
+menu:Click("Type")
+local krol = W.List("item", "krol blade")[1].cells
+eq(krol.slot .. "/" .. krol.type .. "/" .. krol.level, "One-Hand/One-Handed Swords/51", "columns chosen from the menu")
+menu:Click("Slot")
+eq(ns.db.listColumns.item.slot, false, "a column switched off stays off")
+menu:Click("Type")
+menu:Click("List width"):Click("Wide")
+eq(ns.db.listWidth, 0.45, "the list width can be changed")
+menu:Click("List width"):Click("Normal")
+C.search:SetText("krol blade")
+eq(C.header.name.text._text, "1 items", "the caption row counts what is listed")
+C.search:SetText("")
+F.types.armor = true
+Fire(C.header.name, "OnClick", "LeftButton")
+eq(ns.db.sort.item, "name", "clicking the name caption sorts by name")
+B.Layout()
+B.Refresh()
+eq(C.header.name.text._text:match("^200 of %d+ items$") ~= nil, true, "and says how many more matched")
+Fire(C.sort, "OnClick", "RightButton")
+DB.ResetFilter()
+
+B.Select("quest")
+eq(ns.Q.QuestType(1) .. " " .. ns.Q.QuestType(4), "dungeon quest", "kinds of quest")
+quests[6].questFlags = 4096
+eq(ns.Q.QuestType(6), "daily", "daily quests by their flag")
+QF.zones[40], QF.dungeons[36], QF.hideDone = true, true, false
+list = W.List("quest", "")
+local function Entry(id) for _, e in ipairs(list) do if e.id == id then return e end end end
+eq(Entry(6).atlas, "questlog-questtypeicon-daily", "the list shows each quest's kind as an icon")
+eq(Entry(6).sub:find("Level 9", 1, true) and Entry(6).sub:find("Daily", 1, true) and Entry(6).sub:find("Westfall", 1, true) ~= nil, true,
+	"and its level, kind and zone on the second line")
+B.Layout()
+B.Refresh()
+eq(C.header.name.text._text, "5 quests", "quest count")
+for _, f in ipairs(allFrames) do
+	if f._kind == "Button" and f:IsShown() and rawget(f, "entry") and f.entry.quest then Fire(f, "OnEnter") end
+end
+Fire(C.filter, "OnClick", "LeftButton")
+menu:Click("Kind of quest"):Click("|A:questlog-questtypeicon-dungeon:14:14|a Dungeon")
+eq(Ids(W.List("quest", "")), "1", "quests filtered by kind")
+menu:Click("Kind of quest"):Click("|A:questlog-questtypeicon-daily:14:14|a Daily")
+eq(Ids(W.List("quest", "")) .. " " .. Summary(), "6 1 Deadmines, Westfall, Dungeon, Daily", "kinds add up")
+ns.db.listColumns.quest.kind, ns.db.listColumns.quest.zone = true, true
+list = W.List("quest", "")
+eq(Entry(6).cells.kind .. "/" .. Entry(6).cells.zone, "Daily/Westfall", "quest columns: type and zone")
+ns.db.listColumns.quest.kind, ns.db.listColumns.quest.zone = false, false
+quests[6].questFlags = nil
+Fire(C.clear, "OnClick")
+QF.hideDone = true
+eq(Has(W.Page("quest", 1), "Dungeon quest"), true, "the quest page names the kind")
+B.Select("profession")
+eq(C.header.name.text._text:match("^%d+ professions$") ~= nil, true, "the professions list is counted as professions")
+
+-- Folding page sections, and showing capped lists in full ---------------------------------------
+local function PageRows() return #Rows("Button", function(f) return rawget(f, "line") ~= nil end) end
+B.Show("quest", 1)
+local unfolded = PageRows()
+local head = PageRow(function(l) return l.head and l.text == "Starts at" end)
+Fire(head, "OnEnter")
+Fire(head, "OnClick", "LeftButton")
+eq(ns.db.folded["quest:Starts at"], true, "clicking a caption folds its section")
+eq(PageRows() < unfolded, true, "a folded section shows only its caption")
+B.Show("quest", 4)
+eq(PageRow(function(l) return l.kind == "npc" end) == nil or ns.db.folded["quest:Starts at"], true, "the fold is remembered for other pages of the kind")
+B.Show("quest", 1)
+Fire(PageRow(function(l) return l.head and l.text == "Starts at" end), "OnClick", "LeftButton")
+eq(PageRows(), unfolded, "clicking again unfolds it")
+local shift = IsShiftKeyDown
+IsShiftKeyDown = function() return true end
+Fire(PageRow(function(l) return l.head and l.text == "Starts at" end), "OnClick", "LeftButton")
+eq(ns.db.folded["quest:Rewards"] and PageRow(function(l) return l.kind == "npc" end) == nil, true, "shift-click folds every section")
+Fire(PageRow(function(l) return l.head and l.text == "Starts at" end), "OnClick", "LeftButton")
+eq(next(ns.db.folded), nil, "and unfolds them all")
+IsShiftKeyDown = shift
+
+p = W.Page("item", 8170)
+local more = FindLine(p, function(l) return l.more ~= nil end)
+eq(more and more.more, "Used to make", "long lists are capped with a line to open them")
+eq(#W.Page("item", 8170, { ["Used to make"] = true }).lines > #p.lines, true, "the page can be built with a list in full")
+B.Show("item", 8170)
+Fire(PageRow(function(l) return l.more == "Used to make" end), "OnEnter")
+Fire(PageRow(function(l) return l.more == "Used to make" end), "OnClick", "LeftButton")
+eq(PageRow(function(l) return l.more == "Used to make" end), nil, "clicking it shows the whole list")
+
+-- Quest chains as goals -------------------------------------------------------------------------
+questsDone[2] = nil
+local chainGoal = ns.AddGoal("Chain")
+B.Show("quest", 1)
+Fire(ButtonWithText("Add to goal"), "OnClick")
+menu:Click("Chain  |cff999999(selected)|r")
+local qe = chainGoal.entries[1]
+menu:Click("Kinds")
+eq(ns.SelectedGoal() == kinds and kinds.entries[#kinds.entries].quest, 1, "another goal can be picked; it becomes the selected one")
+ns.Remove(kinds.entries, kinds.entries[#kinds.entries])
+local goalCount = #ns.Goals()
+menu:Click("|cff40ff40+ New goal|r")
+local made = ns.Goals()[#ns.Goals()]
+eq(#ns.Goals() == goalCount + 1 and made.title == "The Defias Brotherhood" and made.entries[1].quest, 1, "or a new goal, named after what is added")
+ns.Remove(ns.Goals(), made)
+ns.selectedGoal = chainGoal
+eq(qe.quest == 1 and qe.chain, true, "a quest with prerequisites is added with its chain")
+local function Steps()
+	local out = {}
+	for _, r in ipairs(ns.GoalRows(chainGoal)) do
+		if r.step then out[#out + 1] = r.quest .. (r.next and "*" or "") end
+	end
+	return table.concat(out, " ")
+end
+eq(Steps(), "5* 6 2", "the chain as steps, the one to do now marked")
+questsDone[5] = true
+eq(Steps(), "5 6* 2", "the mark moves on as quests are finished")
+eq(ns.RowDone(ns.GoalRows(chainGoal)[2]), true, "finished steps count as done")
+eq(#chainGoal.entries, 1, "steps are not entries of their own")
+Fire(PageRow(function(l) return l.kind == "quest" and l.id == 4 end), "OnEnter")
+Fire(PageRow(function(l) return l.kind == "quest" and l.id == 4 end), "OnClick", "RightButton")
+eq(chainGoal.entries[2].quest == 4 and chainGoal.entries[2].chain, nil, "right-click adds a linked quest; alone it has no steps")
+ns.Remove(chainGoal.entries, chainGoal.entries[2])
+local ve = ns.AddItem(chainGoal, 2244, 1)
+eq(ve.via, 1, "an item only a quest rewards brings that quest's chain")
+eq(Steps(), "5 6* 2 5 6* 2 1", "the item lists the chain including the rewarding quest")
+eq(ns.AddItem(chainGoal, 5191, 1).via, nil, "items with another source do not")
+B.Select("goals")
+ns.UI.Layout()
+local function GoalRow(pred)
+	local found
+	EachRow(function(row) if row.goal == chainGoal and pred(row.data) then found = found or row end end)
+	return found
+end
+EachRow(function(row)
+	Fire(row, "OnEnter")
+	Fire(row, "OnClick", "RightButton")
+end)
+local parent = GoalRow(function(r) return r.entry == qe and not r.step end)
+eq(parent.data.foldable, true, "entries with steps can be folded")
+Fire(parent.toggle, "OnClick")
+ns.UI.Layout()
+eq(qe.fold and GoalRow(function(r) return r.entry == qe and r.step end), nil, "folding hides the steps in the goal list")
+eq(GoalRow(function(r) return r.entry == ve and r.step end) ~= nil, true, "other entries keep theirs")
+Fire(GoalRow(function(r) return r.entry == qe end).toggle, "OnClick")
+ns.UI.Layout()
+eq(GoalRow(function(r) return r.entry == qe and r.step end) ~= nil, true, "unfolding brings them back")
+for _, f in ipairs(allFrames) do
+	if rawget(f, "goal") == chainGoal and rawget(f, "summary") and f:IsShown() then Fire(f, "OnClick", "RightButton") end
+end
+menu:Click("Collapse all goals")
+eq(chainGoal.collapsed, true, "all goals can be collapsed at once")
+menu:Click("Expand all goals")
+ns.UI.Layout()
+ns.Tracker.Update()
+local nextLines = 0
+for _, f in ipairs(allFrames) do
+	if f._parent == tracker and f:IsShown() and rawget(f, "left") and f.left._text == "next: And Another" then nextLines = nextLines + 1 end
+end
+eq(nextLines, 2, "the tracker shows only the step to do now, per chain")
+local function TrackerLine(pred)
+	for _, f in ipairs(allFrames) do
+		if f._parent == tracker and f:IsShown() and pred(f) then return f end
+	end
+end
+local function StepLine() return TrackerLine(function(f) return rawget(f, "left") and f.left._text == "First Step" end) end
+eq(StepLine(), nil, "later steps stay folded away")
+local itemLine = TrackerLine(function(f) return rawget(f, "entry") == ve end)
+eq(itemLine.toggle:IsShown(), true, "a tracked quest reward has a toggle in the tracker")
+Fire(itemLine, "OnEnter")
+Fire(itemLine.toggle, "OnClick")
+eq(ve.trackerFold == false and StepLine() ~= nil, true, "expanding lists every quest still needed for the item")
+Fire(TrackerLine(function(f) return rawget(f, "entry") == ve end).toggle, "OnClick")
+eq(StepLine(), nil, "and collapsing leaves the next step only")
+local titleLine = TrackerLine(function(f) return rawget(f, "goal") == chainGoal end)
+Fire(titleLine.toggle, "OnClick")
+eq(chainGoal.trackerCollapsed, true, "the goal's own toggle folds the whole goal")
+Fire(TrackerLine(function(f) return rawget(f, "goal") == chainGoal end).toggle, "OnClick")
+Fire(GoalRow(function(r) return r.step and r.quest == 6 end), "OnClick", "LeftButton")
+eq(B.Current().kind == "quest" and B.Current().id, 6, "clicking a step opens its quest page")
+B.Select("goals")
+ns.UI.Layout()
+Fire(GoalRow(function(r) return r.entry == qe and not r.step end), "OnClick", "RightButton")
+menu:Click("Track this quest only")
+eq(qe.chain, nil, "a quest entry can drop its steps")
+Fire(GoalRow(function(r) return r.entry == ve and not r.step end), "OnClick", "RightButton")
+menu:Click("Stop tracking the quest chain")
+eq(Steps(), "", "and so can an item")
+Fire(GoalRow(function(r) return r.entry == ve end), "OnClick", "RightButton")
+menu:Click("Track the quest: The Defias Brotherhood")
+eq(ve.via, 1, "the rewarding quest can be tracked again from the menu")
+ns.Remove(ns.Goals(), chainGoal)
+ns.UI.Layout()
+
+-- Columns: sorting by caption, more columns, compact rows --------------------------------------
+local function HeaderCell(label)
+	for _, cell in ipairs(C.header.cells) do
+		if cell:IsShown() and cell.text._text == label then return cell end
+	end
+end
+B.Select("quest")
+ns.db.listColumns.quest.zone, ns.db.listColumns.quest.xp = true, true
+B.Layout()
+B.Refresh()
+Fire(HeaderCell("Zone"), "OnEnter")
+Fire(HeaderCell("Zone"), "OnClick", "LeftButton")
+eq(ns.db.sort.quest, "zone", "clicking a column caption sorts by it")
+Fire(HeaderCell("Zone"), "OnClick", "LeftButton")
+eq(ns.db.sortDesc.quest, true, "clicking it again reverses")
+Fire(C.sort, "OnClick", "RightButton")
+eq(ns.Q.QuestXP(1) == 1150 and ns.Q.QuestXP(4), nil, "quest experience where QuestieDB has it")
+eq(W.List("quest", "defias")[1].cells.xp, "1150", "XP column")
+ns.db.listColumns.quest.zone, ns.db.listColumns.quest.xp = false, false
+ns.db.listColumns.item.ilvl, ns.db.listColumns.item.price = true, true
+local helm = W.List("item", "lionheart helm")[1]
+eq(helm.cells.ilvl .. " " .. helm.cells.price, "61 109471c", "item level and vendor cost columns")
+eq(helm.sub:find("Level 56", 1, true) and helm.sub:find("Head", 1, true) and helm.sub:find("Plate", 1, true) ~= nil, true,
+	"two-line rows show level, slot and type")
+ns.db.listColumns.item.ilvl, ns.db.listColumns.item.price = false, false
+ns.db.sort.dungeon, ns.db.sortDesc.dungeon = "bosses", true
+list = W.List("dungeon", "")
+eq(#ns.Q.Dungeon(list[1].id).bosses >= #ns.Q.Dungeon(list[2].id).bosses and list[1].sub:find("bosses", 1, true) ~= nil, true,
+	"dungeons sorted by their number of bosses")
+ns.db.sort.dungeon, ns.db.sortDesc.dungeon = nil, nil
+ns.db.compactList = true
+for _, t in ipairs(W.TABS) do B.Select(t.key) end
+ns.db.compactList = false
+
+-- NPC filters -------------------------------------------------------------------------------------
+B.Select("npc")
+local NF = ns.db.npcFilter
+eq(#W.List("npc", ""), 0, "no NPCs listed before anything is asked")
+Fire(C.filter, "OnClick", "LeftButton")
+menu:Click("|TInterface\\GossipFrame\\VendorGossipIcon:14|t Vendor")
+list = W.List("npc", "")
+eq(Ids(list), "200", "vendors can be browsed without typing")
+eq(list[1].icon == "Interface\\GossipFrame\\VendorGossipIcon" and list[1].sub:find("Westfall", 1, true) ~= nil, true, "with role icon and zone")
+menu:Click("|TInterface\\Tooltips\\RareEliteNameplateIcon:14|t Rare")
+eq(Ids(W.List("npc", "")), "", "role and rank narrow each other")
+menu:Click("|TInterface\\GossipFrame\\VendorGossipIcon:14|t Vendor")
+eq(Ids(W.List("npc", "")), "300", "rares")
+menu:Click("Zones and dungeons"):Click("Westfall")
+eq(Ids(W.List("npc", "")) .. Summary(), "Rare, Westfall", "rares of a zone")
+menu:Click("Zones and dungeons"):Click("Elwynn Forest")
+eq(Ids(W.List("npc", "")), "300", "zones add up")
+ns.db.listColumns.npc.role = true
+NF.ranks = {}
+eq(W.List("npc", "heather")[1].cells.role, "Vendor, Innkeeper", "role column")
+ns.db.listColumns.npc.role = false
+Fire(C.clear, "OnClick")
+eq(next(NF.zones) == nil and next(NF.ranks) == nil, true, "NPC filter cleared")
+
+-- Other characters' bags and banks ------------------------------------------------------------------
+local A = ns.Alts
+containers[0] = { { itemID = 8170, stackCount = 5 }, { itemID = 8170, stackCount = 2 } }
+containers[-1] = { { itemID = 8170, stackCount = 20 } }
+containers[13] = { { itemID = 8170, stackCount = 99 } }
+A.Scan()
+local mine = ns.db.chars["Tester - Realm"]
+eq(mine.bags[8170] == 7 and mine.bags[12640], 1, "bags and worn items are recorded")
+eq(mine.bank[8170], nil, "the bank is not read while it is closed")
+Fire(eventFrame, "OnEvent", "BANKFRAME_OPENED")
+RunTimers()
+eq(mine.bank[8170], 20, "the bank is recorded when open, without the shared warband bank")
+Fire(eventFrame, "OnEvent", "BANKFRAME_CLOSED")
+containers[-1] = {}
+RunTimers()
+eq(mine.bank[8170], 20, "and kept after it closes")
+eq(A.Any(), false, "no other character yet")
+B.Select("goals")
+ns.UI.Layout()
+eq(ns.UI.header.cells.alts:IsShown(), false, "the Alts column stays hidden until there is one")
+ns.db.chars["Banker - Realm"] = { bags = { [8170] = 3 }, bank = { [8170] = 30 } }
+ns.db.chars["Other - Elsewhere"] = { bags = { [8170] = 1 }, bank = {} }
+local onAlts, holders = A.Count(8170)
+eq(onAlts .. " " .. holders[1].name .. " " .. holders[2].name, "34 Banker Other - Elsewhere", "what other characters hold, biggest first")
+local altGoal = ns.AddGoal("Alts")
+ns.AddItem(altGoal, 8170, 100)
+printed = {}
+ns.Refresh()
+RunTimers()
+eq(table.concat(printed, "\n"):find("Banker (and 1 more) has 34 x", 1, true) ~= nil, true, "chat says when another character has what a goal lacks")
+printed = {}
+ns.Refresh()
+RunTimers()
+eq(#printed, 0, "once per session")
+local altRow
+EachRow(function(row) if row.goal == altGoal then altRow = row end end)
+eq(altRow.cells.alts._text, "34", "the Alts column")
+eq(altRow.cells.have._text, "0", "other characters do not count as yours")
+Fire(altRow, "OnEnter")
+tooltipPostCall(GameTooltip, { id = 8170 })
+eq(Has(W.Page("item", 8170), "Banker has 33 (bags 3, bank 30)"), true, "the item page lists who has it")
+Fire(ns.UI.header.cells.alts, "OnMouseUp", "RightButton")
+menu:Click("Characters"):Click("Banker")
+eq((A.Count(8170)), 1, "a character can be switched off")
+menu:Click("Characters"):Click("Banker")
+menu:Click("Alts")
+eq(ns.db.columns.alts, false, "goal columns are toggled from the caption row")
+menu:Click("Alts")
+menu:Click("Characters"):Click("Forget a character"):Click("Banker")
+eq(ns.db.chars["Banker - Realm"], nil, "or forgotten")
+ns.db.chars["Other - Elsewhere"] = nil
+ns.Remove(ns.Goals(), altGoal)
+ns.UI.Layout()
+
+---------------------------------------------------------------------------
+-- Closest first, dungeon levels, quest rewards, resizing by dragging, the hover map
+---------------------------------------------------------------------------
+-- the player stands at 50, 50 in Westfall, a map of 4000 by 3000 yards (see C_Map above)
+eq(ns.Q.Distance({ [40] = { { 52.9, 53.7 }, { 90, 90 } }, [12] = { { 50, 50 } } }) > 160.5, true, "distance to the closest spawn in the player's zone")
+eq(ns.Q.Distance({ [12] = { { 50, 50 } } }), nil, "no distance to other zones")
+ns.db.listColumns.npc.near = true
+W.SortBy("npc", "near")
+list = W.List("npc", "")
+eq(Ids(list):sub(1, 7) .. " " .. list[2].cells.near .. " " .. list[#list].cells.near, "100 200 161 yd ", "NPCs by distance: the player's zone first, closest on top")
+ns.db.sort.npc, ns.db.listColumns.npc.near = nil, false
+
+ns.db.nearFirst = true
+p = W.Page("item", 8170) -- dropped by VanCleef (in the Deadmines) and Gryan (here)
+local function DropOrder(page)
+	local ids = {}
+	for _, l in ipairs(page.lines) do if l.kind == "npc" then ids[#ids + 1] = l.id end end
+	return table.concat(ids, " ")
+end
+eq(DropOrder(p) .. " " .. FindLine(p, function(l) return l.id == 100 end).right, "100 639 0 yd  Westfall", "drop sources: closest first")
+B.Show("item", 8170)
+Fire(PageRow(function(l) return l.toggle == "nearFirst" end), "OnClick", "LeftButton")
+eq(tostring(ns.db.nearFirst) .. " " .. DropOrder(W.Page("item", 8170)), "false 639 100", "a click on the line switches closest-first off")
+ns.db.nearFirst = true
+
+local d = ns.Q.Dungeon(36)
+eq(table.concat({ ns.Q.DungeonLevels(d) }, "-"), "16-23", "dungeon levels: tuned level to two above its highest boss")
+eq(table.concat({ ns.Q.DungeonLevels(ns.Q.Dungeon(3065)) }, "-"), "13-20", "a dungeon without known bosses spans seven levels")
+eq(table.concat({ ns.Q.DungeonLevels(ns.Q.Dungeon(409)) }, "-"), "60-60", "raids are for their one level")
+
+p = W.Page("quest", 1)
+eq(Has(p, "1150 XP") and Has(p, "1150 experience"), true, "quest page shows the experience")
+eq(Has(W.Page("quest", 6), "+250 reputation with Faction 72"), true, "and the reputation")
+eq(W.List("quest", "defias")[1].sub:find("1150 XP", 1, true) ~= nil, true, "quest rows show the experience")
+
+-- hovering a location shows the small map; nothing to check but that it draws
+B.Show("npc", 100)
+local place = PageRow(function(l) return l.area == 40 end)
+eq(#place.line.points, 2, "a location line knows every spawn of its zone")
+Fire(place, "OnEnter")
+Fire(place, "OnLeave")
+
+-- dragging: the left edge of a column caption, and the bar between list and page
+local cursor = 100
+function GetCursorPosition() return cursor, 100 end
+local function Drag(handle, dx)
+	cursor = 100
+	Fire(handle, "OnMouseDown")
+	cursor = 100 + dx
+	Fire(handle, "OnUpdate")
+	Fire(handle, "OnMouseUp")
+	eq(handle._scripts.OnUpdate, nil, "the drag ends with the mouse button")
+end
+local function Grip(caption)
+	for _, f in ipairs(allFrames) do
+		if f._parent == caption and f._scripts.OnMouseDown and f._scripts.OnEnter then return f end
+	end
+end
+B.Select("quest")
+local caption = HeaderCell("Lvl")
+Fire(Grip(caption), "OnEnter")
+Fire(Grip(caption), "OnLeave")
+Drag(Grip(caption), -20)
+eq(ns.db.colWidth["quest:level"], 46, "dragging a caption's left edge outwards widens the column")
+eq(HeaderCell("Lvl"):GetWidth(), 46, "and the list is redrawn with it")
+ns.db.fontSize = 12
+Drag(Grip(ns.UI.header.cells.need), 10)
+eq(ns.db.colWidth["goal:need"], 30, "goal list columns are dragged the same way")
+ns.db.colWidth = {}
+local before = ns.db.listWidth
+Drag(C.splitter, 60)
+eq(ns.db.listWidth > before and ns.db.listWidth <= 0.75, true, "dragging the bar between list and page resizes the list")
+ns.db.listWidth = before
+
+---------------------------------------------------------------------------
+-- Places of links, prices, reputation, other characters, gathering nodes on the map
+---------------------------------------------------------------------------
+eq(ns.Q.PlaceOf("item", 4592).x, 52.9, "an item's place is that of what sells or drops it")
+eq(ns.Q.PlaceOf("quest", 2), nil, "quest links get no map: the quest's page has one per giver and target")
+-- Rugged Leather drops from VanCleef (in an instance) and Gryan: no chance known, so both count
+eq(ns.Q.PlaceOf("item", 8170).area .. " " .. #ns.Q.PlaceOf("item", 8170).points, "40 2", "an item's place: the spawns of what drops it best, in the player's zone")
+local chanceOf = ns.Q.DropChance
+ns.Q.DropChance = function(item, npc) return npc == 639 and 50 or 5 end
+eq(ns.Q.PlaceOf("item", 8170), nil, "a creature with a far better drop chance shuts the others out (here: an instance boss)")
+ns.Q.DropChance = chanceOf
+-- Copper Ore is gathered: the nodes of the zone the player is in, else of the zone around it
+eq(ns.Q.PlaceOf("item", 2770).uiMap, 1436, "a gathered item's place is its nodes in the player's zone")
+local bestMap, mapInfo = C_Map.GetBestMapForUnit, C_Map.GetMapInfo
+C_Map.GetBestMapForUnit = function() return 1455 end -- Ironforge
+C_Map.GetMapInfo = function(map) return { mapID = map, name = "Map " .. map, parentMapID = map == 1455 and 1426 or 0 } end
+eq(ns.Q.PlaceOf("item", 2770).uiMap, 1426, "in a city: the zone around it (Dun Morogh for Ironforge)")
+C_Map.GetBestMapForUnit, C_Map.GetMapInfo = bestMap, mapInfo
+B.Show("item", 2770)
+Fire(PageRow(function(l) return l.item == 2770 end), "OnEnter") -- a map without a main dot
+p = W.Page("item", 2770)
+local mined = FindLine(p, function(l) return l.uiMap ~= nil end)
+eq(Has(p, "Gathered in") and mined.uiMap .. " " .. tostring(mined.right), "1436 closest to you", "a gathered item's page lists its zones, yours first")
+eq(#ns.Nodes.ZonesOfItem(2770) > 5 and #ns.Nodes.ZonesOfItem(8170), 0, "zones with nodes, none for items that are not gathered")
+local zoneRow = PageRow(function(l) return l.uiMap == 1436 end)
+Fire(zoneRow, "OnEnter")
+Fire(zoneRow, "OnClick", "LeftButton")
+eq(openedMap, 1436, "clicking a zone of nodes opens its map")
+B.Select("item")
+C.search:SetText("copper ore")
+Fire(Rows("Button", function(f) return rawget(f, "entry") and f.entry.item == 2770 end)[1], "OnEnter") -- the map, from the list
+GameTooltip._lines = ""
+ns.Recipes.AddTooltipLines(GameTooltip, 15062)
+eq(GameTooltip._lines:find("yellow at 310", 1, true) ~= nil and GameTooltip._lines:find("(have ", 1, true) ~= nil, true,
+	"a craftable item's tooltip: skill levels, and each reagent with what you have")
+eq(ns.Q.PlaceOf("npc", 639), nil, "nothing to show for NPCs inside an instance")
+B.Show("item", 4592)
+local vendor = PageRow(function(l) return l.kind == "npc" and l.id == 200 end)
+Fire(vendor, "OnEnter") -- draws the small map for the vendor
+Fire(vendor, "OnLeave")
+
+p = W.Page("item", 4592)
+eq(Has(p, "Vendors sell it for") and Has(p, "Vendors pay you"), true, "item page: what a vendor charges and pays")
+eq(Has(p, "Auction house"), false, "no auction price without an auction addon")
+Auctionator = { API = { v1 = { GetAuctionPriceByItemID = function(caller, id) return id == 4592 and 1234 or nil end } } }
+eq(FindLine(W.Page("item", 4592), function(l) return l.text:find("Auction house", 1, true) end).right, "1234c", "auction price from Auctionator")
+eq(DB.GetSellPrice(12640) > 0 and DB.GetSellPrice(12640) < DB.GetPrice(12640), true, "vendors pay less than they charge")
+Auctionator = nil
+
+ns.db.listColumns.quest.rep = true
+eq(W.List("quest", "and another")[1].cells.rep, "+250 Faction 72", "reputation column of the quest list")
+ns.db.listColumns.quest.rep = false
+
+ns.db.chars["Mule - Realm"] = { bags = { [8170] = 3 }, bank = { [8170] = 2 } }
+eq(ns.Alts.Summary(8170), "5 on Mule", "who else holds an item, in words")
+ns.db.chars["Mule - Realm"] = nil
+eq(ns.Alts.Summary(8170), nil, "nobody else has it")
+
+-- gathering nodes: a fake world map showing Westfall
+WorldMapFrame = NewMock("Frame")
+local canvas = NewMock("Frame")
+canvas._w, canvas._h = 1000, 600
+WorldMapFrame.ScrollContainer = NewMock("Frame")
+WorldMapFrame.GetCanvas = function() return canvas end
+WorldMapFrame.GetMapID = function() return 1436 end
+ns.Nodes.Init()
+-- what the tracked goals miss is on the map without asking: a vendor's spot, and the ore's nodes
+local mapGoal = ns.AddGoal("Map goal")
+for _, g in ipairs(ns.Goals()) do g.untracked = g ~= mapGoal or nil end
+ns.AddItem(mapGoal, 4592, 5) -- sold by Innkeeper Heather, in Westfall
+ns.Nodes.GoalsChanged()
+eq(ns.Nodes.Draw(), 1, "the world map shows where to get what a tracked goal misses")
+-- the minimap has it too, until the player is close enough for the game's own tracking
+Minimap.GetZoom = function() return 0 end -- 467 yards across
+function IsIndoors() return false end
+function GetCVar() return "0" end
+function GetPlayerFacing() return 0 end
+eq(ns.Nodes.MiniUpdate(), 1, "the minimap shows goal sources within its reach (the vendor is 161 yards away)")
+local standing = C_Map.GetPlayerMapPosition
+C_Map.GetPlayerMapPosition = function() return { GetXY = function() return 0.529, 0.53 end } end
+eq(ns.Nodes.MiniUpdate(), 0, "and hides an icon once the player is next to it")
+C_Map.GetPlayerMapPosition = function() return { GetXY = function() return 0.1, 0.1 end } end
+eq(ns.Nodes.MiniUpdate(), 0, "or when it is beyond the minimap's reach")
+C_Map.GetPlayerMapPosition = standing
+ns.db.nodes.minimap = false
+eq(ns.Nodes.MiniUpdate(), 0, "the minimap icons can be switched off")
+ns.db.nodes.minimap = true
+ns.AddItem(mapGoal, 2770, 20) -- Copper Ore: gathered
+ns.Nodes.GoalsChanged()
+local copper = ns.Nodes.Draw()
+eq(copper > 10, true, "for gathered items their nodes, though gathering nodes are switched off")
+eq(W.Source(2770), "Mining: Copper Vein", "the Source of a gathered item names its node")
+DB.ResetFilter()
+ns.db.filter.sources.gathered = true
+eq(DB.MatchesFilter(2770) and not DB.MatchesFilter(8170), true, "the source filter knows gathered items")
+DB.ResetFilter()
+mapGoal.untracked = true
+ns.Nodes.GoalsChanged()
+eq(ns.Nodes.Draw(), 0, "untracked goals put nothing on the map")
+for _, g in ipairs(ns.Goals()) do g.untracked = nil end
+ns.Remove(ns.Goals(), mapGoal)
+ns.db.nodes.goals = false
+ns.Nodes.GoalsChanged()
+RunTimers()
+
+B.Select("item")
+Fire(C.filter, "OnClick", "LeftButton")
+menu:Click(ns.Hex.good .. "Gear for my level, best first|r")
+eq(ns.db.filter.minLevel .. "-" .. ns.db.filter.maxLevel .. " " .. ns.db.sort.item .. " " .. tostring(ns.db.sortDesc.item), "21-30 ilvl true",
+	"one click lists gear for the player's level, best first")
+local top = W.List("item", "")
+eq(DB.GetItemLevel(top[1].id) >= DB.GetItemLevel(top[#top].id) and DB.GetLevel(top[1].id) <= 30, true, "and the list follows")
+DB.ResetFilter()
+ns.db.sort.item, ns.db.sortDesc.item = nil, nil
+
+eq(ns.Nodes.Draw(), 0, "gathering nodes are off until asked for")
+Fire(mm, "OnClick", "RightButton")
+menu:Click("Show gathering nodes")
+RunTimers()
+local all = ns.Nodes.Draw()
+eq(all > 50, true, "gathering nodes of the zone the map shows")
+local function Kind(name) return "|TInterface\\Icons\\" .. ({ Mining = "Trade_Mining", Herbalism = "Trade_Herbalism", Chests = "INV_Box_01", Fishing = "Trade_Fishing" })[name] .. ":14|t " .. name end
+menu:Find(Kind("Mining")):Click("|T" .. C_Item.GetItemIconByID(2770) .. ":14|t Copper Vein")
+local fewer = ns.Nodes.Draw()
+eq(fewer < all, true, "a node type is unticked in the minimap button's menu")
+menu:Find(Kind("Mining")):Click("Untick all")
+local noMining = ns.Nodes.Draw()
+menu:Find(Kind("Mining")):Click("Tick all")
+eq(noMining < fewer and ns.Nodes.Draw(), all, "or all types of a kind")
+for _, kind in ipairs({ "Herbalism", "Chests", "Fishing" }) do menu:Click(Kind(kind)) end
+local mining = ns.Nodes.Draw()
+eq(mining, all - noMining, "clicking a kind's name switches the whole kind off, keeping its ticks")
+menu:Click(Kind("Mining"))
+eq(ns.Nodes.Draw(), 0, "every kind off: nothing on the map")
+menu:Click(Kind("Mining"))
+-- OpenMap's stitched map: every other zone lies one map width to the right of Westfall.
+-- The fake scroll frame is as wide as the canvas, so with the spare margin the view covers both.
+local scroll = WorldMapFrame.ScrollContainer
+scroll._w, scroll._h = 1000, 600
+scroll.GetCurrentScrollX, scroll.GetCurrentScrollY = function() return 0.5 end, function() return 0.5 end
+OpenMapAPI = { major = 1, IsStitched = function() return true end, GetView = function() return 0.5, 0.5, 2 end,
+	WorldFromMap = function(id, x, y) return (id == 1436 and 0 or 1) + x, y end,
+	MapFromWorld = function(_, u, v) return u, v end, ArtTopLevel = function() return 40 end }
+local wide = ns.Nodes.Draw()
+eq(wide > mining and wide <= 1500, true, "OpenMap: every zone in view gets its nodes, thinned evenly when there are too many")
+scroll._w = 100 -- zoomed in: a tenth of the canvas wide, around the middle of Westfall
+local narrow = ns.Nodes.Draw()
+eq(narrow > 0 and narrow < mining, true, "OpenMap zoomed in: only what is in view is drawn")
+OpenMapAPI, ns.db.nodes.show = nil, false
 
 print = _G.print
 io.write(("ok - %d checks, %d items in database (build %s)\n"):format(checks, ns.ItemDBCount, ns.ItemDBBuild))

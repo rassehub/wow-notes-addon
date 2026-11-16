@@ -2,12 +2,15 @@
 """Regenerate the bundled game data from the live WoW Forever tables.
 
 Writes into GoalNotes/Data/:
-    Items.lua     item names, quality, item class
+    Items.lua     item names, quality, class, subclass, slot, levels, vendor price, stats
     Recipes.lua   profession recipes, skill levels and reagents
-    Dungeons.lua  dungeons and raids with their bosses
+    Dungeons.lua  dungeons and raids with their level and bosses
+    Nodes.lua     where ore veins, herbs and other gathering nodes are (from GatherLite)
 
-Quests, NPCs, drops and map coordinates are not in the game client; the addon reads
-those from the separate QuestieDB addon at runtime.
+This script is the one source of the bundled data: everything the game client knows goes
+through it. Quests, quest XP, NPCs, drops and map coordinates are not in the client; the
+addon reads those from the separate QuestieDB addon at runtime, and the zone maps from the
+game itself. .github/workflows/update-data.yml runs this script every week.
 
 Usage:
     python3 tools/update_db.py                 # latest Forever build, English names
@@ -21,6 +24,7 @@ Run it after every Forever content patch, then /reload.
 import argparse
 import csv
 import datetime
+import difflib
 import io
 import json
 import re
@@ -36,11 +40,24 @@ ERA_PRODUCT = "wow_classic_era"
 DATA = Path(__file__).resolve().parent.parent / "GoalNotes" / "Data"
 CHUNK = 1500  # records per Lua string; keeps every constant far below Lua's limits
 UA = {"User-Agent": "addon-item-db-updater"}
+# Gathering nodes: GatherLite's Forever database (MIT, github.com/wuild/gatherlite), which
+# its maintainer collects from Wowhead. nodes.lua names the node types, forever.lua holds
+# [objectID][uiMapID] = { x, y, ... }.
+GATHERLITE = "https://raw.githubusercontent.com/wuild/gatherlite/master/"
+NODE_FILES = {"nodes": "scripts/nodes.lua", "points": "plugins/database/data/forever.lua"}
+NODE_KINDS = {"ore": "Mining", "herb": "Herbalism", "container": "Chests", "fishing": "Fishing"}
 TABLES = ["ItemSparse", "Item", "SkillLine", "SkillLineAbility", "SpellEffect", "SpellReagents",
-          "Map", "DungeonEncounter", "MapDifficulty"]
-LOCALIZED = {"ItemSparse", "SkillLine", "Map", "DungeonEncounter"}
+          "Map", "DungeonEncounter", "MapDifficulty", "AreaTable", "LFGDungeons", "ContentTuning"]
+LOCALIZED = {"ItemSparse", "SkillLine", "Map", "DungeonEncounter"}  # LFGDungeons stays English: matched by name
 PROFESSION_CATEGORIES = {"9", "11"}  # SkillLine.CategoryID: secondary and primary professions
 CREATE_ITEM = "24"                   # SpellEffect.Effect
+# Stat filters of the item browser: label -> ItemSparse.StatModifier_bonusStat ids.
+# The position in this list is the bit in each item's stat mask; append only.
+# shortcut: random-suffix items ("of the Monkey") carry no stats in the table and names taken
+# from Classic Era only list primary stats, so those items match fewer stat filters.
+STATS = [("Strength", {4}), ("Agility", {3}), ("Stamina", {7}), ("Intellect", {5}), ("Spirit", {6}),
+         ("Attack Power", {38}), ("Spell Power", {41, 42, 45}), ("Critical Strike", {32}), ("Hit", {31}),
+         ("Mana Regeneration", {43}), ("Defense, Dodge, Parry, Block", {12, 13, 14, 15})]
 # Recipe items are tied to what they teach by name: "Pattern: Devilsaur Leggings".
 # shortcut: enUS prefixes only, so localized builds lose the scroll -> item link; switch to
 # ItemEffect/SpellEffect(learn spell) joins if that matters.
@@ -104,6 +121,7 @@ def main():
 
     # --- items -----------------------------------------------------------
     item_class = {r["ID"]: r["ClassID"] for r in tables["Item"]}
+    item_kind = {r["ID"]: (int(r["SubclassID"]), int(r["InventoryType"])) for r in tables["Item"]}
     items, by_name, skipped = [], {}, 0
     named = {r["ID"] for r in tables["ItemSparse"]}
     from_era = [r for r in era_rows if r["ID"] in item_class and r["ID"] not in named]
@@ -114,7 +132,12 @@ def main():
             skipped += 1
             continue
         item_id = int(row["ID"])
-        items.append((item_id, int(row["OverallQualityID"]), int(item_class.get(row["ID"], 15)), name))
+        found = {int(row[f"StatModifier_bonusStat_{i}"]) for i in range(10)}
+        mask = sum(1 << bit for bit, (_, ids) in enumerate(STATS) if ids & found)
+        sub, slot = item_kind.get(row["ID"], (0, 0))
+        items.append((item_id, int(row["OverallQualityID"]), int(item_class.get(row["ID"], 15)),
+                      max(0, sub), slot, max(0, int(row["RequiredLevel"])), max(0, int(row["ItemLevel"])),
+                      max(0, int(row["BuyPrice"])), max(0, int(row["SellPrice"])), mask, name))
         by_name.setdefault(name, item_id)
     if len(items) < 1000:
         sys.exit(f"only {len(items)} items parsed - refusing to overwrite the database")
@@ -153,7 +176,7 @@ def main():
         sys.exit(f"only {len(recipes)} recipes parsed - refusing to overwrite the database")
 
     scrolls = []
-    for item_id, _, _, name in items:
+    for item_id, *_, name in items:
         m = SCROLL.match(name)
         target = m and by_name.get(m.group(2))
         if target in recipes:
@@ -163,8 +186,12 @@ def main():
             f'ns.ItemDBDate = "{datetime.date.today().isoformat()}"']
     write_lua(DATA / "Items.lua",
               ["-- Source: wago.tools ItemSparse + Item, product wowf (World of Warcraft: Forever)", *meta,
-               f"ns.ItemDBCount = {len(items)}", "-- One record per line: itemID|quality|classID|name"],
-              "ItemDBRaw", [f"{i}|{q}|{c}|{n}" for i, q, c, n in items])
+               f"ns.ItemDBCount = {len(items)}",
+               "-- stat filter labels; bit n-1 of an item's statMask means it has stat n",
+               "ns.ItemStats = { " + ", ".join(json.dumps(label) for label, _ in STATS) + " }",
+               "-- One record per line: itemID|quality|classID|subclassID|inventoryType|requiredLevel|itemLevel"
+               "|vendorBuyPrice|vendorSellPrice|statMask|name"],
+              "ItemDBRaw", ["|".join(map(str, item)) for item in items])
     write_lua(DATA / "Recipes.lua",
               ["-- Source: wago.tools SpellEffect + SpellReagents + SkillLineAbility, product wowf",
                f"ns.RecipeCount = {len(recipes)}",
@@ -184,18 +211,88 @@ def main():
         names = bosses.setdefault(r["MapID"], [])
         if name and name not in names and not JUNK.search(name) and "|" not in name and ";" not in name:
             names.append(name)
+    # The level a dungeon is tuned for: the content tuning of its area, else of the group
+    # finder entry with (nearly) the same name: "Zul'Farak" is Zul'Farrak.
+    # An instance with neither is left out: the client ships maps of raids and dungeons that
+    # are not in the game (yet), and those have no tuning.
+    def key(name):
+        return re.sub(r"^the |[^a-z]", "", name.lower())
+    tuning = {r["ID"]: int(r["MinLevelSquish"]) for r in tables["ContentTuning"]}
+    area_tuning = {r["ID"]: r["ContentTuningID"] for r in tables["AreaTable"]}
+    lfg = {key(r["Name_lang"]): r["ContentTuningID"] for r in tables["LFGDungeons"]}
+
+    def level(r, name):
+        mine = key(name)
+        close = difflib.get_close_matches(mine, list(lfg), 1, 0.85) or [k for k in lfg if mine.startswith(k)]  # "Onyxia"
+        for ct in (area_tuning.get(r["AreaTableID"]), lfg[close[0]] if close else None):
+            if tuning.get(ct):
+                return tuning[ct]
+        return 0
+
     dungeons = []
     for r in sorted(tables["Map"], key=lambda r: r["MapName_lang"]):
         name = r["MapName_lang"].strip()
         if r["InstanceType"] not in ("1", "2") or r["ID"] not in bosses or JUNK.search(name) or "<" in name:
             continue
-        dungeons.append(f'{r["ID"]}|{r["InstanceType"]}|{players.get(r["ID"], 0)}|{name}|' + ";".join(bosses[r["ID"]]))
+        if not level(r, name):
+            continue
+        dungeons.append(f'{r["ID"]}|{r["InstanceType"]}|{players.get(r["ID"], 0)}|{level(r, name)}|{name}|'
+                        + ";".join(bosses[r["ID"]]))
     write_lua(DATA / "Dungeons.lua",
-              ["-- Source: wago.tools Map + DungeonEncounter + MapDifficulty, product wowf",
-               "-- One record per line: instanceMapID|type (1 dungeon, 2 raid)|players|name|boss;boss;..."],
+              ["-- Source: wago.tools Map + DungeonEncounter + MapDifficulty + AreaTable + LFGDungeons"
+               " + ContentTuning, product wowf",
+               "-- One record per line: instanceMapID|type (1 dungeon, 2 raid)|players|level|name|boss;boss;..."],
               "DungeonRaw", dungeons)
 
-    print(f"{len(dungeons)} dungeons and raids; {len(from_era)} item names taken from Classic Era")
+    # --- gathering nodes -------------------------------------------------
+    node_text = {}
+    for what, path in NODE_FILES.items():
+        local = Path(args.dir) / f"GatherLite_{what}.lua" if args.dir else None
+        if local:
+            node_text[what] = local.read_text(encoding="utf-8") if local.exists() else ""
+        else:
+            try:
+                node_text[what] = fetch(GATHERLITE + path)
+            except OSError as error:  # GatherLite moved or is unreachable: items must still update
+                print(f"warning: gathering nodes not updated ({path}: {error}); Nodes.lua is kept", file=sys.stderr)
+                node_text[what] = ""
+    # InsertObject("ore", { 1731, 2055 }, "copper_vein", ...): several object ids are one node type
+    types, type_of = [], {}
+    for kind, ids, name in re.findall(r'InsertObject\("(\w+)",\s*\{([\d,\s]*)\},\s*"(\w+)"', node_text["nodes"]):
+        label = name.replace("_", " ").title()
+        # the icon is the item the node gives, found by name: Copper Vein -> Copper Ore
+        ore = re.sub(r"^(Small|Rich) | (Vein|Deposit)$", "", label) + " Ore"
+        types.append((NODE_KINDS.get(kind, kind.title()), label, by_name.get(label) or by_name.get(ore) or 0))
+        for object_id in re.findall(r"\d+", ids):
+            type_of[object_id] = len(types)
+    points, object_id, nodes = {}, None, []  # (type, map) -> {(x, y)}
+    for line in node_text["points"].splitlines():
+        head = re.match(r"\s*\[(\d+)\] = \{", line)
+        if head and line.startswith("    ["):
+            object_id = head.group(1)
+        elif head:
+            map_id = head.group(1)
+        elif object_id in type_of:
+            numbers = re.findall(r"[\d.]+", line)
+            # three digits each for x and y: thousandths of the map
+            points.setdefault((type_of[object_id], int(map_id)), set()).update(
+                (min(999, round(float(x) * 1000)), min(999, round(float(y) * 1000)))
+                for x, y in zip(numbers[::2], numbers[1::2]))
+    for (node_type, map_id), found in sorted(points.items()):
+        nodes.append(f"{node_type}|{map_id}|" + "".join(f"{x:03d}{y:03d}" for x, y in sorted(found)))
+    if nodes:
+        write_lua(DATA / "Nodes.lua",
+                  ["-- Source: GatherLite's Forever node database, github.com/wuild/gatherlite (collected from Wowhead).",
+                   "-- GatherLite is MIT licensed, Copyright (c) 2019 Wuild; see the README for the full notice.",
+                   "-- node types, in the order the records number them: { kind, name, itemID for the icon (0: none) }",
+                   "ns.NodeTypes = {"] + [f"\t{{ {json.dumps(k)}, {json.dumps(n)}, {i} }}," for k, n, i in types] + ["}",
+                   "-- One record per line: nodeType|uiMapID|xxxyyyxxxyyy... (thousandths of the map, three digits each)"],
+                  "NodeRaw", nodes)
+    elif not args.dir:
+        print("warning: no gathering nodes parsed; Nodes.lua is kept as it was", file=sys.stderr)
+
+    print(f"{len(dungeons)} dungeons and raids; {len(nodes)} node lists with "
+          f"{sum(len(p) for p in points.values())} gathering nodes; {len(from_era)} item names taken from Classic Era")
     print(f"{DATA}: {len(items)} items ({skipped} junk rows skipped), {len(recipes)} recipes, "
           f"{len(scrolls)} recipe items, build {build} ({args.locale})")
 

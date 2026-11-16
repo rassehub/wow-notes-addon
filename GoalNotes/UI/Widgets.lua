@@ -72,6 +72,65 @@ function ns.Color(key)
 	return c[1], c[2], c[3]
 end
 
+-- The item tooltip used everywhere in the addon: the game's own, then how the item is made,
+-- what you and your other characters hold, and where it comes from; next to it the small
+-- map of that place. The caller adds its own hint lines and calls GameTooltip:Show().
+function ns.ItemTooltip(owner, id, anchor, x, y)
+	GameTooltip:SetOwner(owner, anchor or "ANCHOR_RIGHT", x or 0, y or 0)
+	ns.ownTooltip = true -- the hook on every item tooltip (Core.lua) would add its lines too
+	GameTooltip:SetHyperlink(ns.GetItem(id).link)
+	ns.ownTooltip = nil
+	ns.Recipes.AddTooltipLines(GameTooltip, id)
+	GameTooltip:AddLine(" ")
+	local bags, bank, warband, total = ns.GetCounts(id)
+	if total > 0 then
+		GameTooltip:AddLine(("You have %d  (bags %d, bank %d)"):format(total, bags, bank + warband), 1, 1, 1)
+	end
+	ns.Alts.AddTooltipLines(GameTooltip, id)
+	local source = ns.Wiki.Source(id)
+	if source then GameTooltip:AddLine("From: " .. source, 0.6, 0.8, 1, true) end
+	ns.MapPreview.For(owner, { kind = "item", id = id })
+end
+
+-- Makes a frame a handle that is dragged sideways. start() runs when the drag begins and
+-- moved(dx) on every frame of it; dx is how far the mouse has gone since, in the handle's units.
+function ns.DragHandle(handle, tip, start, moved)
+	handle:EnableMouse(true)
+	local line = handle:CreateTexture(nil, "OVERLAY")
+	line:SetColorTexture(1, 0.82, 0, 0.3)
+	line:SetWidth(1)
+	line:SetPoint("TOP")
+	line:SetPoint("BOTTOM")
+	handle:SetScript("OnEnter", function(self)
+		SetCursor("UI_RESIZE_CURSOR")
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:SetText(tip)
+		GameTooltip:Show()
+	end)
+	handle:SetScript("OnLeave", function()
+		ResetCursor()
+		GameTooltip:Hide()
+	end)
+	handle:SetScript("OnMouseDown", function(self)
+		local scale = self:GetEffectiveScale()
+		local from = GetCursorPosition() / scale
+		start()
+		self:SetScript("OnUpdate", function() moved(GetCursorPosition() / scale - from) end)
+	end)
+	handle:SetScript("OnMouseUp", function(self) self:SetScript("OnUpdate", nil) end)
+end
+
+-- A handle on the left edge of a column caption: columns are laid out from the right, so
+-- that is the edge that moves. set(width) gets the width the drag asks for.
+function ns.ColumnGrip(caption, set)
+	local grip, from = CreateFrame("Frame", nil, caption), 0
+	grip:SetPoint("TOPLEFT", -5, 2)
+	grip:SetPoint("BOTTOMRIGHT", caption, "BOTTOMLEFT", 2, -2)
+	ns.DragHandle(grip, "Drag to resize the column", function() from = caption:GetWidth() end,
+		function(dx) set(math.max(16, math.min(400, from - dx))) end)
+	return grip
+end
+
 ---------------------------------------------------------------------------
 -- Autocomplete
 -- opts.search(text) -> { {id, name, quality, info?}, ... }
@@ -91,7 +150,7 @@ local function CreateSuggestion(ac, i)
 	b:SetPoint("RIGHT", -6, 0)
 	b.sel = b:CreateTexture(nil, "BACKGROUND")
 	b.sel:SetAllPoints()
-	b.sel:SetTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
+	b.sel:SetTexture(ns.Style.highlight)
 	b.sel:SetBlendMode("ADD")
 	b.icon = b:CreateTexture(nil, "ARTWORK")
 	b.icon:SetSize(ROW_H - 4, ROW_H - 4)
@@ -108,12 +167,10 @@ local function CreateSuggestion(ac, i)
 		local id = ac.results[ac.offset + i].id
 		ac.index = ac.offset + i
 		ac:Highlight()
-		GameTooltip:SetOwner(self, "ANCHOR_RIGHT", 8, 0)
-		GameTooltip:SetHyperlink("item:" .. id)
-		ns.Recipes.AddTooltipLines(GameTooltip, id)
+		ns.ItemTooltip(self, id, "ANCHOR_RIGHT", 8, 0)
 		GameTooltip:Show()
 	end)
-	b:SetScript("OnLeave", GameTooltip_Hide)
+	b:SetScript("OnLeave", ns.HideTips)
 	return b
 end
 

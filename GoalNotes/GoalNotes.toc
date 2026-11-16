@@ -4,7 +4,7 @@
 ## Author: rassehub
 ## Version: 2.0.0
 ## IconTexture: Interface\Icons\INV_Misc_Note_01
-## OptionalDeps: QuestieDB
+## OptionalDeps: QuestieDB, OpenMap
 ## SavedVariables: GoalNotesDB
 ## SavedVariablesPerCharacter: GoalNotesCharDB
 ## AddonCompartmentFunc: GoalNotes_OnAddonCompartmentClick
@@ -12,15 +12,20 @@
 Data\Items.lua
 Data\Recipes.lua
 Data\Dungeons.lua
+Data\Nodes.lua
 Core.lua
+Alts.lua
 Index.lua
 ItemDB.lua
 Wiki\Source.lua
 Wiki\Pages.lua
 UI\Widgets.lua
+UI\MapPreview.lua
+UI\Filters.lua
 UI\Main.lua
 UI\Compare.lua
 UI\Settings.lua
 UI\Tracker.lua
+UI\MapNodes.lua
 UI\Minimap.lua
 UI\Browser.lua

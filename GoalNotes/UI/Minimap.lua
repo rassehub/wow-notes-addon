@@ -22,6 +22,14 @@ local function FollowCursor()
 	Place()
 end
 
+-- The right-click menu: the tracker, and what is drawn on the world map.
+function MinimapButton.Menu(owner)
+	MenuUtil.CreateContextMenu(owner, function(_, root)
+		root:CreateButton("Show or hide the tracker", ns.Tracker.Toggle)
+		ns.Nodes.MenuSections(root)
+	end)
+end
+
 function MinimapButton.Apply()
 	button:SetShown(ns.db.minimap)
 	Place()
@@ -53,7 +61,7 @@ function MinimapButton.Init()
 
 	button:SetScript("OnClick", function(_, mouseButton)
 		if mouseButton == "RightButton" then
-			ns.Tracker.Toggle()
+			MinimapButton.Menu(button)
 		elseif mouseButton == "MiddleButton" or IsShiftKeyDown() then
 			ns.Settings.Toggle()
 		else
@@ -66,7 +74,7 @@ function MinimapButton.Init()
 		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
 		GameTooltip:SetText(ns.TITLE)
 		GameTooltip:AddLine("Left-click: goal list", 1, 1, 1)
-		GameTooltip:AddLine("Right-click: tracker", 1, 1, 1)
+		GameTooltip:AddLine("Right-click: tracker, and what is shown on the world map", 1, 1, 1)
 		GameTooltip:AddLine("Shift-click: settings", 1, 1, 1)
 		GameTooltip:AddLine("Drag: move this button", 0.5, 0.5, 0.5)
 		GameTooltip:Show()

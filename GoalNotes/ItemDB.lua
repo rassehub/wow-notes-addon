@@ -9,14 +9,17 @@ ns.ItemDB, ns.Recipes = ItemDB, Recipes
 ItemDB.Normalize = ns.Normalize
 
 local index -- built on first use from the raw data
-local quals, classes = {}, {}
+local quals, classes, subs, slots, levels, stats, ilvls, prices, sells = {}, {}, {}, {}, {}, {}, {}, {}, {}
 
 local function Build()
 	index = ns.NewIndex()
 	for _, chunk in ipairs(ns.ItemDBRaw or {}) do
-		for id, q, class, name in chunk:gmatch("(%d+)|(%d+)|(%d+)|([^\n]+)") do
+		for id, q, class, sub, slot, level, ilvl, price, sell, mask, name in
+			chunk:gmatch("(%d+)|(%d+)|(%d+)|(%d+)|(%d+)|(%d+)|(%d+)|(%d+)|(%d+)|(%d+)|([^\n]+)") do
 			id = tonumber(id)
-			quals[id], classes[id] = tonumber(q), tonumber(class)
+			quals[id], classes[id], subs[id] = tonumber(q), tonumber(class), tonumber(sub)
+			slots[id], levels[id], stats[id] = tonumber(slot), tonumber(level), tonumber(mask)
+			ilvls[id], prices[id], sells[id] = tonumber(ilvl), tonumber(price), tonumber(sell)
 			index:Add(id, name)
 		end
 	end
@@ -38,14 +41,48 @@ function ItemDB.GetClass(id)
 	return classes[id]
 end
 
+-- required character level, 0 when there is none
+function ItemDB.GetLevel(id)
+	if not index then Build() end
+	return levels[id] or 0
+end
+
+function ItemDB.GetItemLevel(id)
+	if not index then Build() end
+	return ilvls[id] or 0
+end
+
+-- what a vendor charges for one, in copper (0: not for sale)
+function ItemDB.GetPrice(id)
+	if not index then Build() end
+	return prices[id] or 0
+end
+
+-- what a vendor pays for one, in copper (0: cannot be sold)
+function ItemDB.GetSellPrice(id)
+	if not index then Build() end
+	return sells[id] or 0
+end
+
+-- What one goes for at the auction house, in copper: the last scan of an auction addon
+-- (Auctionator or TradeSkillMaster). nil without one, or when it never saw the item.
+function ItemDB.GetAuctionPrice(id)
+	-- pcall: an addon that changed its API is just skipped
+	local auctionator = Auctionator and Auctionator.API and Auctionator.API.v1
+	local ok, price
+	if auctionator then ok, price = pcall(auctionator.GetAuctionPriceByItemID, "GoalNotes", id) end
+	if not (ok and price) and TSM_API then ok, price = pcall(TSM_API.GetCustomPriceValue, "dbmarket", "i:" .. id) end
+	return ok and type(price) == "number" and price > 0 and price or nil
+end
+
 ---------------------------------------------------------------------------
 -- Recipes
 ---------------------------------------------------------------------------
 
-local recipes, scrolls, usedIn, byProfession
+local recipes, scrolls, scrollsOf, usedIn, byProfession
 
 local function BuildRecipes()
-	recipes, scrolls, usedIn, byProfession = {}, {}, {}, {}
+	recipes, scrolls, scrollsOf, usedIn, byProfession = {}, {}, {}, {}, {}
 	for _, chunk in ipairs(ns.RecipeRaw or {}) do
 		for id, made, prof, yellow, grey, mats in chunk:gmatch("(%d+)|(%d+)|(%d+)|(%d+)|(%d+)|([^\n]+)") do
 			id = tonumber(id)
@@ -65,7 +102,10 @@ local function BuildRecipes()
 		end
 	end
 	for scroll, id in (ns.RecipeScrollsRaw or ""):gmatch("(%d+)=(%d+)") do
-		scrolls[tonumber(scroll)] = tonumber(id)
+		scroll, id = tonumber(scroll), tonumber(id)
+		scrolls[scroll] = id
+		scrollsOf[id] = scrollsOf[id] or {}
+		table.insert(scrollsOf[id], scroll)
 	end
 	ns.RecipeRaw, ns.RecipeScrollsRaw = nil, nil
 end
@@ -80,6 +120,14 @@ end
 function Recipes.FromScroll(id)
 	if not recipes then BuildRecipes() end
 	return scrolls[id]
+end
+
+-- The recipe items (pattern, plans, ...) that teach how to make the item, or nil.
+-- shortcut: nil is read as "a trainer teaches it"; the scroll link is made by enUS name
+-- (see tools/update_db.py), so a recipe item with an unusual name is missed.
+function Recipes.Scrolls(id)
+	if not recipes then BuildRecipes() end
+	return scrollsOf[id]
 end
 
 -- crafted item ids of one profession, easiest first
@@ -99,15 +147,32 @@ function Recipes.UsedIn(id)
 	return usedIn[id]
 end
 
+-- every crafted item id (unordered)
+function Recipes.All()
+	if not recipes then BuildRecipes() end
+	return recipes
+end
+
 -- Wiki lines for our own tooltips: how it is made and what it is used for.
 function Recipes.AddTooltipLines(tooltip, id)
 	local recipe = Recipes.Get(Recipes.FromScroll(id) or id)
 	if recipe then
 		tooltip:AddLine(" ")
 		tooltip:AddLine(recipe.profession .. (recipe.made > 1 and (" (makes " .. recipe.made .. ")") or "") .. ":", 1, 0.82, 0)
-		for _, r in ipairs(recipe.reagents) do
-			tooltip:AddLine("  " .. r[2] .. " x " .. (ItemDB.GetName(r[1]) or ("Item " .. r[1])), 1, 1, 1)
+		if recipe.yellow > 0 then
+			-- shortcut: the skill needed to learn a recipe is not in the game's tables; it is
+			-- at or below the skill where the recipe turns yellow
+			local mine = ns.SkillLevel(recipe.profession)
+			tooltip:AddLine(("  Skill: " .. ns.Hex.yellow .. "yellow at %d|r, " .. ns.Hex.grey .. "grey at %d|r - %s"):format(recipe.yellow, recipe.grey,
+				mine and ("yours is " .. mine) or "you do not have this profession"), 1, 1, 1)
 		end
+		for _, r in ipairs(recipe.reagents) do
+			local _, _, _, have = ns.GetCounts(r[1])
+			local enough = have >= r[2]
+			tooltip:AddLine("  " .. r[2] .. " x " .. (ItemDB.GetName(r[1]) or ("Item " .. r[1])) .. "  (have " .. have .. ")",
+				enough and 0.25 or 1, 1, enough and 0.25 or 1)
+		end
+		tooltip:AddLine("Learned from: " .. ns.Wiki.LearnedFrom(Recipes.FromScroll(id) or id), 0.6, 0.8, 1, true)
 	end
 	local uses = Recipes.UsedIn(id)
 	if uses then
@@ -120,50 +185,167 @@ function Recipes.AddTooltipLines(tooltip, id)
 end
 
 ---------------------------------------------------------------------------
--- Filters (saved in ns.db.filter = { type = key, source = key })
+-- Filters. Every group is a set of toggles: an item passes a group when it matches any
+-- ticked entry (stats: every ticked entry), and passes the filter when it passes all groups.
+-- A filter table (ns.db.filter for the Items tab, ns.db.recipeFilter for Professions):
+--   types = { [key] = true }, subs = { [classID * 100 + subclassID] = true },
+--   slots = { [label] = true }, quality = { [n] = true }, stats = { [n] = true }
+--   (indexes into ns.ItemStats), sources = { [key] = true }, minLevel, maxLevel
 ---------------------------------------------------------------------------
 
 ItemDB.TYPES = {
-	{ key = "all", label = "All items" },
-	{ key = "armor", label = "Armor", classes = { [4] = true } },
-	{ key = "weapon", label = "Weapons", classes = { [2] = true } },
-	{ key = "consumable", label = "Consumables", classes = { [0] = true } },
-	{ key = "reagent", label = "Reagents and trade goods", classes = { [5] = true, [7] = true }, reagent = true },
-	{ key = "recipe", label = "Recipes", classes = { [9] = true } },
-	{ key = "quest", label = "Quest items", classes = { [12] = true } },
-	{ key = "other", label = "Other", classes = { [1] = true, [3] = true, [6] = true, [11] = true, [13] = true, [15] = true } },
+	{ key = "armor", label = "Armor", classes = { 4 } },
+	{ key = "weapon", label = "Weapons", classes = { 2 } },
+	{ key = "consumable", label = "Consumables", classes = { 0 } },
+	{ key = "reagent", label = "Reagents and trade goods", classes = { 5, 7 } },
+	{ key = "recipe", label = "Recipes", classes = { 9 } },
+	{ key = "quest", label = "Quest items", classes = { 12 } },
+	{ key = "other", label = "Other", classes = { 1, 3, 6, 11, 13, 15 } },
 }
+-- Weapon and armor kinds: item class, subclass, label; in menu order.
+ItemDB.SUBTYPES = {
+	weapon = {
+		{ 2, 7, "One-Handed Swords" }, { 2, 8, "Two-Handed Swords" }, { 2, 0, "One-Handed Axes" }, { 2, 1, "Two-Handed Axes" },
+		{ 2, 4, "One-Handed Maces" }, { 2, 5, "Two-Handed Maces" }, { 2, 15, "Daggers" }, { 2, 13, "Fist Weapons" },
+		{ 2, 6, "Polearms" }, { 2, 10, "Staves" }, { 2, 2, "Bows" }, { 2, 18, "Crossbows" }, { 2, 3, "Guns" },
+		{ 2, 16, "Thrown" }, { 2, 19, "Wands" }, { 2, 20, "Fishing Poles" },
+	},
+	armor = { { 4, 1, "Cloth" }, { 4, 2, "Leather" }, { 4, 3, "Mail" }, { 4, 4, "Plate" }, { 4, 6, "Shields" } },
+}
+-- Equipment slots: label, then the inventory types that go there.
+ItemDB.SLOTS = {
+	{ "Head", 1 }, { "Neck", 2 }, { "Shoulder", 3 }, { "Back", 16 }, { "Chest", 5, 20 }, { "Wrist", 9 },
+	{ "Hands", 10 }, { "Waist", 6 }, { "Legs", 7 }, { "Feet", 8 }, { "Finger", 11 }, { "Trinket", 12 },
+	{ "One-Hand", 13, 21 }, { "Two-Hand", 17 }, { "Off Hand", 14, 22, 23 }, { "Ranged", 15, 25, 26, 28 },
+}
+ItemDB.QUALITIES = { { 1, "Common" }, { 2, "Uncommon" }, { 3, "Rare" }, { 4, "Epic" }, { 5, "Legendary" } }
+-- field: the QuestieDB item field that must be set (those sources need QuestieDB)
 ItemDB.SOURCES = {
-	{ key = "any", label = "Any source" },
-	{ key = "crafted", label = "Crafted by a profession" },
-	{ key = "found", label = "Not crafted (loot, vendors, quests)" },
+	{ key = "crafted", label = "Crafted by a profession", short = "crafted" },
+	{ key = "found", label = "Not crafted", short = "not crafted" },
+	{ key = "gathered", label = "Gathered (ore, herbs)", short = "gathered" },
+	{ key = "quest", label = "Quest reward", short = "quest reward", field = "questRewards" },
+	{ key = "drop", label = "Dropped by a creature", short = "dropped", field = "npcDrops" },
+	{ key = "vendor", label = "Sold by a vendor", short = "sold", field = "vendors" },
 }
 
-local typeByKey = {}
-for _, t in ipairs(ItemDB.TYPES) do typeByKey[t.key] = t end
-
-function ItemDB.FilterActive()
-	local f = ns.db.filter
-	return f.type ~= "all" or f.source ~= "any"
+local SETS = { "types", "subs", "slots", "quality", "stats", "sources" }
+local classType, slotOf = {}, {}
+for _, t in ipairs(ItemDB.TYPES) do
+	for _, class in ipairs(t.classes) do classType[class] = t.key end
+end
+for _, slot in ipairs(ItemDB.SLOTS) do
+	for i = 2, #slot do slotOf[slot[i]] = slot[1] end
 end
 
-function ItemDB.FilterLabel()
-	local f, label = ns.db.filter, nil
-	if f.type ~= "all" then label = typeByKey[f.type].label end
-	if f.source ~= "any" then
-		label = (label and (label .. ", ") or "") .. (f.source == "crafted" and "crafted" or "not crafted")
-	end
-	return label or "All"
+local subLabel, typeLabel = {}, {}
+for _, kinds in pairs(ItemDB.SUBTYPES) do
+	for _, kind in ipairs(kinds) do subLabel[kind[1] * 100 + kind[2]] = kind[3] end
+end
+for _, t in ipairs(ItemDB.TYPES) do typeLabel[t.key] = t.label end
+
+-- "Head", "One-Hand", ... or nil for things that are not worn
+function ItemDB.SlotName(id)
+	if not index then Build() end
+	return slotOf[slots[id]]
 end
 
-function ItemDB.MatchesFilter(id)
-	local f = ns.db.filter
-	local t = typeByKey[f.type]
-	if t and t.classes then
-		local class = ItemDB.GetClass(id)
-		if not (t.classes[class] or (t.reagent and Recipes.UsedIn(id))) then return false end
+-- "Daggers", "Plate", "Consumables", ...
+function ItemDB.TypeName(id)
+	if not index then Build() end
+	local class = classes[id]
+	return subLabel[(class or 0) * 100 + (subs[id] or 0)] or typeLabel[classType[class] or ""]
+end
+
+-- Makes sure every group exists (saved filters from older versions lack some).
+function ItemDB.PrepareFilter(f)
+	for _, key in ipairs(SETS) do
+		if type(f[key]) ~= "table" then f[key] = {} end
 	end
-	if f.source ~= "any" and (Recipes.Get(id) ~= nil) ~= (f.source == "crafted") then return false end
+	return f
+end
+
+-- Empties the groups in place: an open menu keeps pointing at them.
+function ItemDB.ResetFilter(f)
+	f = f or ns.db.filter
+	for _, key in ipairs(SETS) do
+		for k in pairs(f[key]) do f[key][k] = nil end
+	end
+	f.minLevel, f.maxLevel = nil, nil
+end
+
+function ItemDB.FilterActive(f)
+	f = f or ns.db.filter
+	for _, key in ipairs(SETS) do
+		if next(f[key]) ~= nil then return true end
+	end
+	return f.minLevel ~= nil or f.maxLevel ~= nil
+end
+
+-- The active filter in words: a list of short phrases (empty when nothing is filtered).
+function ItemDB.FilterParts(f)
+	f = f or ns.db.filter
+	local parts = {}
+	for _, t in ipairs(ItemDB.TYPES) do
+		if f.types[t.key] then parts[#parts + 1] = t.label end
+	end
+	for _, key in ipairs({ "weapon", "armor" }) do
+		for _, sub in ipairs(ItemDB.SUBTYPES[key]) do
+			if f.subs[sub[1] * 100 + sub[2]] then parts[#parts + 1] = sub[3] end
+		end
+	end
+	for _, slot in ipairs(ItemDB.SLOTS) do
+		if f.slots[slot[1]] then parts[#parts + 1] = slot[1] end
+	end
+	for _, q in ipairs(ItemDB.QUALITIES) do
+		if f.quality[q[1]] then parts[#parts + 1] = q[2] end
+	end
+	if f.minLevel or f.maxLevel then
+		parts[#parts + 1] = "level " .. (f.minLevel or 1) .. "-" .. (f.maxLevel or "max")
+	end
+	for n, label in ipairs(ns.ItemStats) do
+		if f.stats[n] then parts[#parts + 1] = label end
+	end
+	for _, source in ipairs(ItemDB.SOURCES) do
+		if f.sources[source.key] then parts[#parts + 1] = source.short end
+	end
+	return parts
+end
+
+function ItemDB.FilterLabel(f)
+	local parts = ItemDB.FilterParts(f)
+	return #parts > 0 and table.concat(parts, ", ") or "All"
+end
+
+function ItemDB.MatchesFilter(id, f)
+	f = f or ns.db.filter
+	if not index then Build() end
+	if next(f.types) or next(f.subs) then
+		local class = classes[id]
+		if not (f.types[classType[class] or ""] or f.subs[(class or 0) * 100 + (subs[id] or 0)]
+			or (f.types.reagent and Recipes.UsedIn(id))) then return false end
+	end
+	if next(f.slots) and not f.slots[slotOf[slots[id]] or ""] then return false end
+	if next(f.quality) and not f.quality[quals[id]] then return false end
+	if f.minLevel or f.maxLevel then
+		local level = levels[id] or 0
+		if level < (f.minLevel or 0) or level > (f.maxLevel or 1000) then return false end
+	end
+	for n in pairs(f.stats) do
+		local bit = 2 ^ (n - 1)
+		if (stats[id] or 0) % (bit * 2) < bit then return false end
+	end
+	if next(f.sources) then
+		local crafted = Recipes.Get(id) ~= nil
+		local ok = (f.sources.crafted and crafted) or (f.sources.found and not crafted)
+			or (f.sources.gathered and ns.Nodes.KindOfItem(id) ~= nil)
+		-- asked last: the only test that goes to QuestieDB
+		for _, source in ipairs(not ok and ns.Q.Available() and ItemDB.SOURCES or {}) do
+			local from = source.field and f.sources[source.key] and ns.Q.Item[source.field](id)
+			if from and #from > 0 then ok = true break end
+		end
+		if not ok then return false end
+	end
 	return true
 end
 

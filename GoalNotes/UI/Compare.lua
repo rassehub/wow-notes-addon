@@ -77,7 +77,7 @@ end
 
 local function SetSlot(slot, item)
 	slot.icon:SetTexture(item and item.icon or "Interface\\PaperDoll\\UI-Backpack-EmptySlot")
-	slot.name:SetText(item and ("|c" .. ns.QualityHex(item.quality) .. item.name .. "|r") or "|cff808080Pick an item to compare|r")
+	slot.name:SetText(item and ("|c" .. ns.QualityHex(item.quality) .. item.name .. "|r") or ns.Hex.grey .. "Pick an item to compare|r")
 end
 
 local function ShowTip(tip, item, anchorTo, point)
@@ -90,7 +90,7 @@ end
 
 function Compare.Update()
 	-- the entry may have been removed or replaced while this window was open
-	local present = false
+	local present = goal == nil -- opened from the wiki: not tied to a goal entry
 	for _, e in ipairs(goal and goal.entries or {}) do
 		if e == entry then present = true end
 	end
@@ -101,8 +101,10 @@ function Compare.Update()
 	SetSlot(frame.slotA, a)
 	SetSlot(frame.slotB, b)
 	for _, row in ipairs(rows) do row:Hide() end
+	frame.replace:SetShown(goal ~= nil)
 	frame.replace:SetEnabled(b ~= nil)
 	frame.addToo:SetEnabled(b ~= nil)
+	frame.addToo:SetText(goal and "Add to goal as well" or "Add the other to goal")
 
 	local n = 0
 	if b then
@@ -223,7 +225,7 @@ function Compare.Init()
 	frame.addToo:SetPoint("BOTTOMRIGHT", -18, 16)
 	frame.addToo:SetText("Add to goal as well")
 	frame.addToo:SetScript("OnClick", function()
-		ns.AddItem(goal, otherId, entry.need)
+		ns.AddItem(goal or ns.SelectedGoal(), otherId, entry.need)
 		frame:Hide()
 		ns.Refresh()
 		ns.UI.Layout()

@@ -22,14 +22,33 @@ ns.defaults = {
 	minimap = true,
 	minimapAngle = 215,
 	tracker = true,
-	filter = { type = "all", source = "any" },
+	-- filters of the Items, Professions and Quests tabs; see ItemDB.lua and Wiki/Pages.lua
+	filter = {},
+	recipeFilter = { professions = {}, learn = {} },
+	questFilter = { side = "mine", hideDone = true, zones = {}, dungeons = {}, factions = {}, kinds = {} },
+	-- result lists: which columns each tab shows (see Wiki.COLUMNS) and how wide the list is
+	npcFilter = { roles = {}, ranks = {}, zones = {} },
+	compactList = false, -- one-line list rows instead of the two-line ones with an icon
+	listColumns = {
+		item = { level = true }, quest = { level = true, xp = true, status = true },
+		profession = { skill = true }, npc = { level = true }, dungeon = { level = true },
+	},
+	listWidth = 0.34, -- share of the window; drag the bar between list and page
+	colWidth = {}, -- column widths changed by dragging, by "tab:column" ("goal:column" on the Goals tab)
+	-- Icons on the world map. show: gathering nodes; off: whole kinds ("Mining"), hidden: by
+	-- "Kind/Node name". goals: where to get what the tracked goals still miss. size: of an icon.
+	-- minimap: the same icons around the player on the minimap.
+	nodes = { show = false, goals = true, minimap = true, size = 14, off = {}, hidden = {} },
+	nearFirst = true, -- "Sold by" and "Dropped by": what is closest in the player's zone first
+	sort = {}, sortDesc = {}, -- per tab: sort key, and whether it is reversed
+	folded = {}, -- wiki page sections that are collapsed, by "kind:Section"
 	colors = {
 		title = { 1, 0.82, 0 },
 		text = { 1, 1, 1 },
 		complete = { 0.25, 1, 0.25 },
 		incomplete = { 1, 0.5, 0.25 },
 	},
-	columns = { need = true, have = true, progress = true },
+	columns = { need = true, have = true, progress = true, source = true, alts = true },
 }
 
 local function CopyDefaults(dst, src)
@@ -43,8 +62,34 @@ local function CopyDefaults(dst, src)
 	end
 end
 
+-- The look, in one place. Text colours, as the escape codes that start coloured text (end it
+-- with "|r"): change one here and it changes everywhere. Colours the player can set are
+-- in ns.defaults.colors (see ns.Color).
+ns.Hex = {
+	gold = "|cffffd100", -- captions, names of goals, "next" and "in your log"
+	dim = "|cff999999", -- hints and secondary text
+	faint = "|cff666666", -- separators
+	good = "|cff40ff40", -- done, fits your level
+	bad = "|cffff6060", -- not for you: wrong faction, too high
+	alt = "|cff99ccff", -- what your other characters hold
+	map = "|cff80ff80", -- "(map)": a line with a place
+	yellow = "|cffffff00", grey = "|cff808080", -- recipe skill: turns yellow, turns grey
+}
+-- Textures and sizes shared by every list.
+ns.Style = {
+	highlight = "Interface\\QuestFrame\\UI-QuestTitleHighlight", -- under the mouse
+	card = { 0, 0, 0, 0.35 }, -- background of a list row
+	plate = { 0, 0, 0, 0.85 }, -- behind badges (recipe skill)
+	selected = { 1, 0.82, 0, 0.2 }, -- the open entry of a list
+}
+
+-- Copper as coins with the game's icons; "" for nothing.
+function ns.Coins(copper)
+	return copper and copper > 0 and C_CurrencyInfo.GetCoinTextureString(copper) or ""
+end
+
 function ns.Print(msg)
-	print("|cffffd100" .. ns.TITLE .. ":|r " .. msg)
+	print(ns.Hex.gold .. ns.TITLE .. ":|r " .. msg)
 end
 
 ---------------------------------------------------------------------------
@@ -96,7 +141,13 @@ end
 -- Goal model. goal = { title, collapsed, untracked, combine, entries = { entry, ... } }
 -- entry = { id = itemID, need = n, craft = bool, sub = { [reagentID] = true } }
 --      or { text = "free note", done = bool }
+--      or { quest = questID, chain = bool }     done when the quest is turned in
+--      or { gold = copper }                     done when you carry that much money
+--      or { skill = "Cooking", need = 225 }     done at that profession skill
 -- craft: show and track the recipe's reagents. sub: reagents that are broken down further.
+-- chain: list the quests that must be done first as steps. An item entry may carry
+-- via = questID: the quest that rewards it, listed with its chain as steps.
+-- Any entry may carry note = "free comment".
 ---------------------------------------------------------------------------
 
 function ns.Goals()
@@ -139,6 +190,21 @@ function ns.AddItem(goal, id, need)
 	local material = class == 5 or class == 7
 	local craft = ns.Recipes.Get(id) and (taught or (ns.db.autoCraft and not material)) and true or nil
 	local entry = { id = id, need = need, craft = craft }
+	-- an item that only a quest gives comes with the quest chain that rewards it
+	local I = not craft and ns.Q.Available() and ns.Q.Item
+	if I and not (I.vendors(id) or I.npcDrops(id) or I.objectDrops(id)) then entry.via = ns.Q.RewardQuests(id)[1] end
+	table.insert(goal.entries, entry)
+	return entry
+end
+
+-- A quest that needs other quests first is added with that chain as steps.
+-- Returns nil when the quest is already on the goal.
+function ns.AddQuest(goal, quest)
+	for _, e in ipairs(goal.entries) do
+		if e.quest == quest then return nil end
+	end
+	goal.collapsed = nil
+	local entry = { quest = quest, chain = ns.Q.Available() and #ns.Q.Chain(quest) > 1 or nil }
 	table.insert(goal.entries, entry)
 	return entry
 end
@@ -164,11 +230,78 @@ function ns.Move(list, value, delta)
 	end
 end
 
+-- Typed text that is a goal but not an item: "100g" / "100 gold", "Cooking 225".
+function ns.ParseSpecial(text)
+	local t = text:lower():match("^%s*(.-)%s*$")
+	local gold = t:match("^(%d+)%s*g$") or t:match("^(%d+)%s*gold$")
+	if gold then return { gold = tonumber(gold) * 10000 } end
+	local name, level = t:match("^(%a[%a ]-)%s+(%d+)$")
+	for _, profession in ipairs(name and ns.Professions or {}) do
+		if profession:lower() == name then return { skill = profession, need = tonumber(level) } end
+	end
+end
+
+function ns.SpecialText(entry)
+	if entry.gold then return math.floor(entry.gold / 10000) .. "g" end
+	if entry.skill then return entry.skill .. " " .. entry.need end
+end
+
+-- Current skill in a profession the character has, or nil.
+function ns.SkillLevel(name)
+	if not (GetProfessions and GetProfessionInfo) then return nil end
+	for i = 1, 6 do
+		local index = select(i, GetProfessions())
+		if index then
+			local profession, _, level = GetProfessionInfo(index)
+			if profession == name then return level end
+		end
+	end
+end
+
+local function QuestInfo(quest)
+	local name = (ns.Q.Available() and ns.Q.Quest.name(quest))
+		or (C_QuestLog.GetTitleForQuestID and C_QuestLog.GetTitleForQuestID(quest))
+		or ("Quest " .. quest)
+	local state = ns.Q.QuestState(quest)
+	return {
+		kind = "quest", label = name, icon = "Interface\\GossipFrame\\AvailableQuestIcon",
+		have = state == "done" and 1 or 0, need = 1,
+		text = state == "done" and "done" or state == "active" and "in your log" or "not started",
+	}
+end
+
+-- For quest, gold and skill entries: { kind, label, icon, have, need, text }. nil for items and notes.
+function ns.EntryInfo(entry)
+	if entry.quest then
+		return QuestInfo(entry.quest)
+	elseif entry.gold then
+		local money = GetMoney()
+		return {
+			kind = "gold", label = "Gold", icon = "Interface\\MoneyFrame\\UI-GoldIcon", have = money, need = entry.gold,
+			text = math.floor(money / 10000) .. "g / " .. math.floor(entry.gold / 10000) .. "g",
+		}
+	elseif entry.skill then
+		local level = ns.SkillLevel(entry.skill)
+		return {
+			kind = "skill", label = entry.skill .. " skill", have = level or 0, need = entry.need,
+			text = (level or "?") .. " / " .. entry.need,
+		}
+	end
+end
+
+-- The same for a display row of ns.GoalRows: quest steps are rows without an entry of their own.
+function ns.RowInfo(row)
+	if row.step then return QuestInfo(row.quest) end
+	return not row.id and row.entry and ns.EntryInfo(row.entry) or nil
+end
+
 function ns.EntryDone(entry)
 	if entry.id then
 		local _, _, _, total = ns.GetCounts(entry.id)
 		return total >= entry.need
 	end
+	local info = ns.EntryInfo(entry)
+	if info then return info.have >= info.need end
 	return entry.done and true or false
 end
 
@@ -177,6 +310,10 @@ end
 --   reagent      a computed reagent row; need already accounts for crafted items you own
 --   broken       a reagent that is itself broken down into the rows below it
 --   label        a caption row (combined materials)
+--   quest        the quest of a quest row
+--   foldable     an entry with rows of its own below it (reagents or quest steps);
+--                entry.fold hides them in the goal list, see also Tracker.Folded
+--   step/next    a computed quest-chain step; next: the one to do now
 function ns.GoalRows(goal)
 	local rows, order = {}, {}
 	local combined = goal.combine and {} or nil -- reagentID -> summed need
@@ -212,12 +349,23 @@ function ns.GoalRows(goal)
 	end
 
 	for _, entry in ipairs(goal.entries) do
-		local row = { entry = entry, id = entry.id, need = entry.need, depth = 0 }
+		local row = { entry = entry, id = entry.id, need = entry.need, depth = 0, quest = entry.quest }
 		rows[#rows + 1] = row
 		if entry.id and entry.craft and ns.Recipes.Get(entry.id) then
 			row.craft = true
 			row.ready = AddReagents(entry, entry.id, entry.need, 1) and not ns.EntryDone(entry)
 		end
+		local last = entry.via or (entry.chain and entry.quest)
+		-- an item you already own needs no quests any more
+		if last and ns.Q.Available() and not (entry.id and ns.EntryDone(entry)) then
+			local steps, open = ns.Q.Chain(last), true
+			for i = 1, #steps - (entry.via and 0 or 1) do -- a quest entry is its own last step
+				local done = ns.Q.QuestState(steps[i]) == "done"
+				rows[#rows + 1] = { entry = entry, quest = steps[i], depth = 1, step = true, next = open and not done or nil }
+				open = open and done
+			end
+		end
+		row.foldable = rows[#rows] ~= row or nil
 	end
 	if combined and #order > 0 then
 		rows[#rows + 1] = { label = "Materials for everything above", depth = 0 }
@@ -229,6 +377,7 @@ function ns.GoalRows(goal)
 end
 
 function ns.RowDone(row)
+	if row.step then return ns.Q.QuestState(row.quest) == "done" end
 	if row.reagent then
 		local _, _, _, total = ns.GetCounts(row.id)
 		return total >= row.need
@@ -260,12 +409,17 @@ local primed = false
 local function CheckCompletions()
 	for _, goal in ipairs(ns.char.goals) do
 		for _, e in ipairs(goal.entries) do
-			if e.id then
+			local info = not e.id and ns.EntryInfo(e)
+			if e.id or info then
 				local done = ns.EntryDone(e)
 				if primed and done and announced[e] == false and ns.db.announce then
-					local item = ns.GetItem(e.id)
-					ns.Print(("|c%s[%s]|r ready for |cffffd100%s|r (%d/%d)"):format(
-						ns.QualityHex(item.quality), item.name, goal.title, e.need, e.need))
+					if e.id then
+						local item = ns.GetItem(e.id)
+						ns.Print(("|c%s[%s]|r ready for " .. ns.Hex.gold .. "%s|r (%d/%d)"):format(
+							ns.QualityHex(item.quality), item.name, goal.title, e.need, e.need))
+					else
+						ns.Print(("%s reached for " .. ns.Hex.gold .. "%s|r (%s)"):format(info.label, goal.title, info.text))
+					end
 					PlaySound(SOUNDKIT.IG_QUEST_LIST_COMPLETE)
 				end
 				announced[e] = done
@@ -281,7 +435,10 @@ function ns.Refresh()
 	queued = true
 	C_Timer.After(0.1, function() -- bag events arrive in bursts
 		queued = false
+		ns.Alts.Scan()
 		CheckCompletions()
+		ns.Alts.Notify()
+		ns.Nodes.GoalsChanged()
 		ns.UI.Layout() -- also refreshes the tracker
 		if ns.Compare and ns.Compare.frame:IsShown() then ns.Compare.Update() end
 	end)
@@ -323,7 +480,7 @@ end
 local function HookTooltips()
 	if not (TooltipDataProcessor and Enum.TooltipDataType) then return end
 	TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip, data)
-		if not ns.db.tooltipInfo or tooltip ~= GameTooltip or not data then return end
+		if not ns.db.tooltipInfo or tooltip ~= GameTooltip or not data or ns.ownTooltip then return end
 		local id = data.id
 		if type(id) ~= "number" or (issecretvalue and issecretvalue(id)) then return end
 		local need, titles = ns.NeededFor(id)
@@ -331,6 +488,7 @@ local function HookTooltips()
 		local _, _, _, total = ns.GetCounts(id)
 		local c = ns.db.colors[total >= need and "complete" or "incomplete"]
 		tooltip:AddDoubleLine(ns.TITLE .. ": " .. titles, total .. "/" .. need, 1, 0.82, 0, c[1], c[2], c[3])
+		ns.Alts.AddTooltipLines(tooltip, id)
 	end)
 end
 
@@ -342,9 +500,9 @@ function GoalNotes_Toggle()
 	if ns.UI then ns.UI.Toggle() end
 end
 
-function GoalNotes_OnAddonCompartmentClick(_, button)
+function GoalNotes_OnAddonCompartmentClick(_, button, owner)
 	if button == "RightButton" then
-		ns.Tracker.Toggle()
+		ns.MinimapButton.Menu(owner or UIParent) -- the same menu as the minimap button's
 	else
 		GoalNotes_Toggle()
 	end
@@ -372,12 +530,14 @@ events:RegisterEvent("ADDON_LOADED")
 for _, event in ipairs({
 	"PLAYER_ENTERING_WORLD", "BAG_UPDATE_DELAYED", "PLAYERBANKSLOTS_CHANGED", "BANKFRAME_OPENED",
 	"BANKFRAME_CLOSED", "BANK_TABS_CHANGED", "PLAYER_ACCOUNT_BANK_TAB_SLOTS_CHANGED",
-	"PLAYER_EQUIPMENT_CHANGED", "GET_ITEM_INFO_RECEIVED",
+	"PLAYER_EQUIPMENT_CHANGED", "GET_ITEM_INFO_RECEIVED", "PLAYER_MONEY", "QUEST_ACCEPTED",
+	"QUEST_TURNED_IN", "QUEST_REMOVED", "SKILL_LINES_CHANGED", "ZONE_CHANGED_NEW_AREA",
 }) do
 	pcall(events.RegisterEvent, events, event) -- unknown event names throw; the set differs per client
 end
 
 events:SetScript("OnEvent", function(_, event, arg1)
+	if event == "BANKFRAME_OPENED" or event == "BANKFRAME_CLOSED" then ns.Alts.SetBankOpen(event == "BANKFRAME_OPENED") end
 	if event ~= "ADDON_LOADED" then return ns.Refresh() end
 	if arg1 ~= ADDON then return end
 
@@ -390,9 +550,12 @@ events:SetScript("OnEvent", function(_, event, arg1)
 	if type(ns.char.goals) ~= "table" then ns.char.goals = {} end
 	if #ns.char.goals == 0 then ns.AddGoal("My Goals") end
 
+	ns.ItemDB.PrepareFilter(ns.db.filter)
+	ns.ItemDB.PrepareFilter(ns.db.recipeFilter)
 	ns.Q.Init()
 	HookLinks()
 	HookTooltips()
 	ns.UI.Init()
+	ns.Nodes.Init()
 	if ns.char.shown then ns.UI.frame:Show() end
 end)
