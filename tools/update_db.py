@@ -17,6 +17,7 @@ Usage:
     python3 tools/update_db.py --build 1.60.1.70938
     python3 tools/update_db.py --locale deDE   # localized names
     python3 tools/update_db.py --dir csv/ --build 1.60.1.70938   # offline, from <Table>.csv files
+    python3 tools/update_db.py --diff          # downloads nothing: what Data/ adds and removes since the last commit
 
 Data comes from wago.tools (product "wowf" = WoW Forever). Standard library only.
 Run it after every Forever content patch, then /reload.
@@ -28,6 +29,7 @@ import difflib
 import io
 import json
 import re
+import subprocess
 import sys
 import urllib.request
 from pathlib import Path
@@ -96,12 +98,51 @@ def write_lua(path, header, var, records):
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
+def diff_summary(ref):
+    """Markdown: what the Data files in the working tree add, remove and change against git `ref`."""
+    def load(name, label, old):
+        if old:
+            shown = subprocess.run(["git", "show", f"{ref}:GoalNotes/Data/{name}.lua"], cwd=DATA.parent.parent,
+                                   capture_output=True, text=True, encoding="utf-8")
+            text = shown.stdout if shown.returncode == 0 else ""  # a file the ref does not have yet
+        else:
+            text = (DATA / f"{name}.lua").read_text(encoding="utf-8")
+        records = {}  # first field -> (what to call it, the whole line)
+        for line in text.splitlines():
+            fields = line.split("|")
+            if fields[0].isdigit() and len(fields) > 4:
+                records[fields[0]] = (fields[label], line)
+        return records
+
+    out = []
+    old_items, new_items = load("Items", -1, True), load("Items", -1, False)
+    for title, name, label in (("Items", "Items", -1), ("Recipes", "Recipes", 0), ("Dungeons and raids", "Dungeons", 4)):
+        old, new = load(name, label, True), load(name, label, False)
+
+        def names(keys):
+            # a recipe is called by what it makes
+            called = [(new_items.get(k) or old_items.get(k) or ("item " + k,))[0] if name == "Recipes"
+                      else (new.get(k) or old.get(k))[0] for k in sorted(keys, key=int)]
+            return ", ".join(called[:40]) + (f" and {len(called) - 40} more" if len(called) > 40 else "")
+
+        added, removed = new.keys() - old.keys(), old.keys() - new.keys()
+        changed = {k for k in new.keys() & old.keys() if new[k][1] != old[k][1]}
+        out.append(f"**{title}**: {len(added)} added, {len(removed)} removed, {len(changed)} changed")
+        out += [f"- {word}: {names(keys)}" for word, keys in (("Added", added), ("Removed", removed), ("Changed", changed)) if keys]
+    return "\n".join(out)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--build", help="exact build, e.g. 1.60.1.70938 (default: latest)")
     ap.add_argument("--locale", default="enUS", help="name locale (default enUS)")
     ap.add_argument("--dir", help="read <Table>.csv files from this directory instead of downloading")
+    ap.add_argument("--diff", nargs="?", const="HEAD", metavar="REF",
+                    help="only print what GoalNotes/Data adds and removes against a git ref (default HEAD)")
     args = ap.parse_args()
+    if args.diff:
+        print(diff_summary(args.diff))
+        return
 
     build = args.build or ("unknown" if args.dir else latest_build())
     tables = {}
